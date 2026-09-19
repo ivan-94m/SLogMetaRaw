@@ -2,6 +2,8 @@
 """S-Log MetaRaw window for DaVinci Resolve (Workspace > Scripts > S-Log MetaRaw)."""
 import datetime
 import os
+import threading
+import time
 import traceback
 
 from . import __version__, extract, plugin_cache, resolve_io
@@ -29,7 +31,23 @@ def _row_values(clip, r):
             status]
 
 
+def _exit_with_resolve():
+    """Resolve runs this script in a separate process. If Resolve quits (or crashes)
+    while the window is open, that process is left orphaned and can get in the way of
+    the next launch, so it follows its parent out."""
+    parent = os.getppid()
+
+    def watch():
+        while True:
+            time.sleep(2)
+            if os.getppid() != parent:   # reparented to launchd: Resolve is gone
+                os._exit(0)
+
+    threading.Thread(target=watch, daemon=True).start()
+
+
 def main(resolve, fusion, bmd, selftest=False):
+    _exit_with_resolve()
     ui = fusion.UIManager
     disp = bmd.UIDispatcher(ui)
     project = resolve.GetProjectManager().GetCurrentProject()
@@ -115,6 +133,16 @@ def main(resolve, fusion, bmd, selftest=False):
                 parent.AddChild(child)
             parent.Expanded = True
 
+    def guard(fn):
+        """An exception inside a callback closes the script window: report it instead."""
+        def wrapper(ev):
+            try:
+                return fn(ev)
+            except Exception as exc:
+                traceback.print_exc()
+                status('Errore: %s  (dettagli nella console di Resolve)' % exc)
+        return wrapper
+
     def on_read(ev):
         clips_tree.Clear()
         details.Clear()
@@ -133,11 +161,14 @@ def main(resolve, fusion, bmd, selftest=False):
                 r = extract.read_clip(path)
                 state['clips'][uid] = c
                 state['results'][uid] = r
-                plugin_cache.write_cache(r)
+                try:
+                    plugin_cache.write_cache(r)
+                except OSError as exc:   # disco pieno o cartella non scrivibile
+                    state['cache_error'] = str(exc)
                 vals = _row_values(c, r)
                 ok += 1
             except extract.DatalessError:
-                vals = [c.GetName()] + [''] * 9 + ['saltata: file su iCloud non scaricato']
+                vals = [c.GetName()] + [''] * 9 + ['saltata: file non presente in locale']
                 skipped += 1
             except Exception as exc:  # keep going on unreadable files
                 vals = [c.GetName()] + [''] * 9 + ['errore: %s' % exc]
@@ -146,8 +177,11 @@ def main(resolve, fusion, bmd, selftest=False):
             for i, v in enumerate(vals + [uid]):
                 row.Text[i] = str(v)
             clips_tree.AddTopLevelItem(row)
-        status('Lette %d clip · saltate %d · errori %d. Seleziona una riga per vedere tutti i dati, poi "Scrivi in Resolve".'
+        msg = ('Lette %d clip · saltate %d · errori %d. Seleziona una riga per vedere tutti i dati, poi "Scrivi in Resolve".'
                % (ok, skipped, errors))
+        if state.get('cache_error'):
+            msg += '  ATTENZIONE: scheda per il plugin non salvata (%s).' % state.pop('cache_error')
+        status(msg)
 
     def on_select(ev):
         item = ev.get('item') if isinstance(ev, dict) else None
@@ -162,10 +196,16 @@ def main(resolve, fusion, bmd, selftest=False):
             return
         n = failed = 0
         cs = []
+        broken = 0
         for uid, r in state['results'].items():
-            rep = resolve_io.apply_to_clip(state['clips'][uid], r,
-                                           set_color_space=itm['SetICS'].Checked,
-                                           overwrite=itm['Overwrite'].Checked)
+            try:
+                rep = resolve_io.apply_to_clip(state['clips'][uid], r,
+                                               set_color_space=itm['SetICS'].Checked,
+                                               overwrite=itm['Overwrite'].Checked)
+            except Exception:   # una clip problematica non deve fermare le altre
+                traceback.print_exc()
+                broken += 1
+                continue
             n += 1
             failed += len(rep['failed'])
             if rep['color_space']:
@@ -175,6 +215,8 @@ def main(resolve, fusion, bmd, selftest=False):
             msg += ' %d campi rifiutati da Resolve (vedi console).' % failed
         if cs:
             msg += ' Input Color Space impostato su %d clip.' % len(cs)
+        if broken:
+            msg += ' %d clip non scritte (vedi console).' % broken
         status(msg)
 
     def on_export(ev):
@@ -187,11 +229,11 @@ def main(resolve, fusion, bmd, selftest=False):
         path = resolve_io.export_csv(list(state['results'].values()), os.path.join(EXPORT_DIR, name))
         status('CSV salvato: %s  →  in Resolve: File › Import › Metadata, con "crea campi custom" attivo.' % path)
 
-    win.On.Read.Clicked = on_read
-    win.On.Write.Clicked = on_write
-    win.On.Export.Clicked = on_export
-    win.On.Clips.CurrentItemChanged = on_select
-    win.On.Clips.ItemClicked = on_select
+    win.On.Read.Clicked = guard(on_read)
+    win.On.Write.Clicked = guard(on_write)
+    win.On.Export.Clicked = guard(on_export)
+    win.On.Clips.CurrentItemChanged = guard(on_select)
+    win.On.Clips.ItemClicked = guard(on_select)
     win.On.SLogMetaRawWin.Close = lambda ev: disp.ExitLoop()
 
     if mp.GetSelectedClips():

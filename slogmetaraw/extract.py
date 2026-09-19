@@ -16,7 +16,7 @@ import struct
 
 from . import codec, mp4, mxf, nrt, rtmd
 
-SF_DATALESS = 0x40000000  # macOS: file content not local (e.g. iCloud evicted)
+SF_DATALESS = 0x40000000  # macOS: only a placeholder on disk, the content lives in cloud storage
 
 # values tracked across the clip to report what changes while recording
 CHANGE_KEYS = ('iris_fnumber', 'focus_distance_m', 'focal_length_mm', 'shutter_speed',
@@ -389,7 +389,7 @@ def read_clip(path, interval=1.0, max_samples=120, allow_dataless=False):
     path = os.path.abspath(path)
     st = os.stat(path)
     if getattr(st, 'st_flags', 0) & SF_DATALESS and not allow_dataless:
-        raise DatalessError('File non scaricato in locale (iCloud): %s' % path)
+        raise DatalessError('File non presente in locale, solo segnaposto: %s' % path)
     out = {'path': path, 'meta': {}, 'display': {}, 'rtmd': [], 'changes': {}, 'warnings': []}
     side = find_sidecar(path)
     if side:

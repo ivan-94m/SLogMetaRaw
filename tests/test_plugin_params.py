@@ -35,6 +35,37 @@ class PluginParams(unittest.TestCase):
         missing = sorted(set(FETCH.findall(self.src)) - set(self.defined))
         self.assertEqual(missing, [], 'parametri letti ma mai definiti: %s' % missing)
 
+    def test_names_are_claimed_per_context(self):
+        """describeInContext runs once per context: a set shared between calls would
+        leave the second context with no parameters, and the instance then fails to build."""
+        self.assertNotIn('static std::set<std::string> used;', self.src,
+                         'il set dei nomi non deve sopravvivere tra una chiamata e l\'altra')
+        body = self.src[self.src.index('void SLogMetaRawFactory::describeInContext'):]
+        self.assertIn('usedNames().clear()', body[:600],
+                      'describeInContext deve azzerare i nomi già usati')
+
+    def test_instance_degrades_instead_of_crashing(self):
+        """A missing parameter must disable the node, never throw back into the host."""
+        ctor = self.src[self.src.index('SLogMetaRaw::SLogMetaRaw(OfxImageEffectHandle'):]
+        ctor = ctor[:ctor.index('\n}\n')]
+        self.assertIn('try {', ctor)
+        self.assertIn('catch (...)', ctor)
+        self.assertIn('m_Ready = true;', ctor)
+        for entry in ('bool SLogMetaRaw::isIdentity', 'void SLogMetaRaw::render',
+                      'void SLogMetaRaw::beginEdit', 'void SLogMetaRaw::changedParam',
+                      'void SLogMetaRaw::changedClip', 'bool SLogMetaRaw::buildParams'):
+            body = self.src[self.src.index(entry):]
+            self.assertIn('m_Ready', body[:body.index('\n}\n')], '%s non controlla m_Ready' % entry)
+
+    def test_reader_cannot_freeze_the_ui(self):
+        """The metadata reader runs on the UI thread: bounded wait, no cloud downloads,
+        and one attempt per clip."""
+        self.assertIn('SF_DATALESS', self.src)
+        self.assertIn('alreadyTried', self.src)
+        wait = re.search(r'for \(int waited = 0; waited < (\d+); \+\+waited\)', self.src)
+        self.assertIsNotNone(wait, 'watchdog del processo di lettura non trovato')
+        self.assertLessEqual(int(wait.group(1)) * 0.05, 10, 'attesa massima troppo lunga')
+
     def test_settings_version_is_saved(self):
         """Saved with every node, so a future release can recognise and convert old settings."""
         self.assertIn('defineIntParam("settingsVersion")', self.src)

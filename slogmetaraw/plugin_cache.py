@@ -102,7 +102,14 @@ def write_cache(r):
     os.makedirs(CACHE_DIR, exist_ok=True)
     path = cache_path(r['path'])
     tmp = path + '.tmp'
-    with open(tmp, 'w', encoding='utf-8') as fh:
-        json.dump(build_record(r), fh, ensure_ascii=False)
-    os.replace(tmp, path)  # atomic: the plugin never sees a half-written file
+    try:
+        with open(tmp, 'w', encoding='utf-8') as fh:
+            json.dump(build_record(r), fh, ensure_ascii=False)
+        os.replace(tmp, path)  # atomic: the plugin never sees a half-written file
+    except OSError:            # disk full or read-only: leave no half-written file behind
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return path

@@ -46,7 +46,7 @@ extern char** environ;
 #define kPluginIcon "com.slogmetaraw.SLogMetaRaw.png"
 #define kPluginIdentifier "com.slogmetaraw.SLogMetaRaw"
 #define kPluginVersionMajor 1
-#define kPluginVersionMinor 0
+#define kPluginVersionMinor 1
 
 #define kOfxNativeConfig "ofx-native-v1.5_aces-v1.3_ocio-v2.3"
 
@@ -172,7 +172,7 @@ static bool runExtractor(const std::string& clipPath, std::string& error)
     int rc = posix_spawn(&pid, python.c_str(), &fa, nullptr, const_cast<char* const*>(argv), envp.data());
     posix_spawn_file_actions_destroy(&fa);
     if (rc != 0) { error = "avvio lettura metadata fallito"; return false; }
-    for (int waited = 0; waited < 400; ++waited) {  // up to 20 s
+    for (int waited = 0; waited < 160; ++waited) {  // up to 8 s: this runs on the UI thread
         int status = 0;
         pid_t r = waitpid(pid, &status, WNOHANG);
         if (r == pid) {
@@ -184,7 +184,7 @@ static bool runExtractor(const std::string& clipPath, std::string& error)
     }
     kill(pid, SIGKILL);
     waitpid(pid, nullptr, 0);
-    error = "lettura metadata troppo lenta (file su iCloud o disco lento?)";
+    error = "lettura metadata troppo lenta (disco lento o file su unita di rete?)";
     return false;
 }
 
@@ -212,12 +212,45 @@ static const DetailField kDetails[] = {
     { "lut", "infoLut", "LUT camera" }, { "file", "infoFile", "File" } };
 static const int kDetailCount = sizeof(kDetails) / sizeof(kDetails[0]);
 
-static bool loadMeta(const std::string& clipPath, ClipMeta& m, std::string& status)
+// macOS marks a file whose content is not on the disk (cloud storage that keeps only a
+// placeholder). Reading one downloads it: minutes of frozen UI, and gigabytes. The script
+// leaves those alone, and so does the node.
+static bool clipIsReadable(const std::string& path, std::string& why)
+{
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) { why = "file non trovato"; return false; }
+    if (st.st_flags & 0x40000000 /* SF_DATALESS */) { why = "il file non e in locale (non scaricato)"; return false; }
+    return true;
+}
+
+// Clips already tried and failed: without this, every click on such a clip would spawn
+// the reader again and freeze the panel for as long as the watchdog allows.
+static bool alreadyTried(const std::string& path, bool p_Forget)
+{
+    static OFX::MultiThread::Mutex mutex;
+    static std::set<std::string> tried;
+    OFX::MultiThread::AutoMutex lock(mutex);
+    if (p_Forget) { tried.erase(path); return false; }
+    if (tried.size() > 500) tried.clear();
+    return !tried.insert(path).second;
+}
+
+static bool loadMeta(const std::string& clipPath, ClipMeta& m, std::string& status, bool p_Force)
 {
     const std::string cachePath = supportDir() + "/cache/" + fnv1a64(clipPath) + ".json";
     std::string text;
+    if (p_Force) alreadyTried(clipPath, true);
     bool fromScript = readFile(cachePath, text);
     if (!fromScript) {
+        std::string why;
+        if (!clipIsReadable(clipPath, why)) {
+            status = "Metadata non letti: " + why;
+            return false;
+        }
+        if (alreadyTried(clipPath, false)) {
+            status = "Metadata non disponibili per questa clip: lancia lo script, poi premi Rileggi metadata";
+            return false;
+        }
         std::string err;
         if (!runExtractor(clipPath, err) || !readFile(cachePath, text)) {
             status = "Metadata non disponibili: " + (err.empty() ? std::string("clip non Sony?") : err);
@@ -336,67 +369,81 @@ private:
     void refreshNodeInfo();
     bool buildParams(double p_Time, DevelopParams& p_Params, std::string* p_NodeInfo = nullptr);
 
-    OFX::Clip* m_DstClip;
-    OFX::Clip* m_SrcClip;
+    bool m_Ready = false;   // false when a parameter is missing: the node then stays transparent
+    OFX::Clip* m_DstClip = nullptr;
+    OFX::Clip* m_SrcClip = nullptr;
 
-    OFX::StringParam* m_Camera;
-    OFX::StringParam* m_Details[kDetailCount];
-    OFX::StringParam* m_Status;
-    OFX::ChoiceParam* m_DecodeUsing;
-    OFX::ChoiceParam* m_WBMode;
-    OFX::ChoiceParam* m_ColorSpace;
-    OFX::ChoiceParam* m_Gamma;
-    OFX::DoubleParam* m_Temp;
-    OFX::DoubleParam* m_Tint;
-    OFX::DoubleParam* m_EI;
-    OFX::DoubleParam* m_Shadows;
-    OFX::DoubleParam* m_Highlights;
-    OFX::DoubleParam* m_Boost;
-    OFX::DoubleParam* m_Saturation;
-    OFX::DoubleParam* m_Contrast;
-    OFX::ChoiceParam* m_NodeInput;
-    OFX::StringParam* m_NodeInfo;
+    OFX::StringParam* m_Camera = nullptr;
+    OFX::StringParam* m_Details[kDetailCount] = {};
+    OFX::StringParam* m_Status = nullptr;
+    OFX::ChoiceParam* m_DecodeUsing = nullptr;
+    OFX::ChoiceParam* m_WBMode = nullptr;
+    OFX::ChoiceParam* m_ColorSpace = nullptr;
+    OFX::ChoiceParam* m_Gamma = nullptr;
+    OFX::DoubleParam* m_Temp = nullptr;
+    OFX::DoubleParam* m_Tint = nullptr;
+    OFX::DoubleParam* m_EI = nullptr;
+    OFX::DoubleParam* m_Shadows = nullptr;
+    OFX::DoubleParam* m_Highlights = nullptr;
+    OFX::DoubleParam* m_Boost = nullptr;
+    OFX::DoubleParam* m_Saturation = nullptr;
+    OFX::DoubleParam* m_Contrast = nullptr;
+    OFX::ChoiceParam* m_NodeInput = nullptr;
+    OFX::StringParam* m_NodeInfo = nullptr;
     // hidden, saved with the grade
-    OFX::StringParam* m_BoundPath;
-    OFX::DoubleParam* m_ShotTemp;
-    OFX::DoubleParam* m_ShotTint;
-    OFX::DoubleParam* m_ShotEI;
-    OFX::IntParam* m_CamSpace;
-    OFX::IntParam* m_CamGamma;
-    OFX::BooleanParam* m_MetaValid;
-    OFX::IntParam* m_SettingsVersion;
+    OFX::StringParam* m_BoundPath = nullptr;
+    OFX::DoubleParam* m_ShotTemp = nullptr;
+    OFX::DoubleParam* m_ShotTint = nullptr;
+    OFX::DoubleParam* m_ShotEI = nullptr;
+    OFX::IntParam* m_CamSpace = nullptr;
+    OFX::IntParam* m_CamGamma = nullptr;
+    OFX::BooleanParam* m_MetaValid = nullptr;
+    OFX::IntParam* m_SettingsVersion = nullptr;
 };
 
 SLogMetaRaw::SLogMetaRaw(OfxImageEffectHandle p_Handle)
     : ImageEffect(p_Handle)
 {
-    m_DstClip = fetchClip(kOfxImageEffectOutputClipName);
-    m_SrcClip = fetchClip(kOfxImageEffectSimpleSourceClipName);
-    m_Camera = fetchStringParam("camera");
-    for (int i = 0; i < kDetailCount; ++i) m_Details[i] = fetchStringParam(kDetails[i].param);
-    m_Status = fetchStringParam("status");
-    m_DecodeUsing = fetchChoiceParam("decodeUsing");
-    m_WBMode = fetchChoiceParam("whiteBalance");
-    m_ColorSpace = fetchChoiceParam("colorSpace");
-    m_Gamma = fetchChoiceParam("gamma");
-    m_Temp = fetchDoubleParam("colorTemp");
-    m_Tint = fetchDoubleParam("tint");
-    m_EI = fetchDoubleParam("exposure");
-    m_Shadows = fetchDoubleParam("shadows");
-    m_Highlights = fetchDoubleParam("highlights");
-    m_Boost = fetchDoubleParam("colorBoost");
-    m_Saturation = fetchDoubleParam("saturation");
-    m_Contrast = fetchDoubleParam("contrast");
-    m_NodeInput = fetchChoiceParam("nodeInput");
-    m_NodeInfo = fetchStringParam("nodeInfo");
-    m_BoundPath = fetchStringParam("boundPath");
-    m_ShotTemp = fetchDoubleParam("shotTemp");
-    m_ShotTint = fetchDoubleParam("shotTint");
-    m_ShotEI = fetchDoubleParam("shotEI");
-    m_CamSpace = fetchIntParam("camSpace");
-    m_CamGamma = fetchIntParam("camGamma");
-    m_MetaValid = fetchBooleanParam("metaValid");
-    m_SettingsVersion = fetchIntParam("settingsVersion");
+    // A fetch throws when the host built this instance without that parameter. Rather
+    // than let the exception travel back into the host, the node marks itself not ready
+    // and behaves as a transparent pass-through: a broken install can slow you down,
+    // never take DaVinci Resolve down with it.
+    try {
+        m_DstClip = fetchClip(kOfxImageEffectOutputClipName);
+        m_SrcClip = fetchClip(kOfxImageEffectSimpleSourceClipName);
+        m_Camera = fetchStringParam("camera");
+        for (int i = 0; i < kDetailCount; ++i) m_Details[i] = fetchStringParam(kDetails[i].param);
+        m_Status = fetchStringParam("status");
+        m_DecodeUsing = fetchChoiceParam("decodeUsing");
+        m_WBMode = fetchChoiceParam("whiteBalance");
+        m_ColorSpace = fetchChoiceParam("colorSpace");
+        m_Gamma = fetchChoiceParam("gamma");
+        m_Temp = fetchDoubleParam("colorTemp");
+        m_Tint = fetchDoubleParam("tint");
+        m_EI = fetchDoubleParam("exposure");
+        m_Shadows = fetchDoubleParam("shadows");
+        m_Highlights = fetchDoubleParam("highlights");
+        m_Boost = fetchDoubleParam("colorBoost");
+        m_Saturation = fetchDoubleParam("saturation");
+        m_Contrast = fetchDoubleParam("contrast");
+        m_NodeInput = fetchChoiceParam("nodeInput");
+        m_NodeInfo = fetchStringParam("nodeInfo");
+        m_BoundPath = fetchStringParam("boundPath");
+        m_ShotTemp = fetchDoubleParam("shotTemp");
+        m_ShotTint = fetchDoubleParam("shotTint");
+        m_ShotEI = fetchDoubleParam("shotEI");
+        m_CamSpace = fetchIntParam("camSpace");
+        m_CamGamma = fetchIntParam("camGamma");
+        m_MetaValid = fetchBooleanParam("metaValid");
+        m_SettingsVersion = fetchIntParam("settingsVersion");
+        m_Ready = true;
+    } catch (const std::exception& e) {
+        fprintf(stderr, "S-Log MetaRaw: nodo disattivato, parametro mancante (%s)\n", e.what());
+        return;
+    } catch (...) {
+        fprintf(stderr, "S-Log MetaRaw: nodo disattivato, parametro mancante\n");
+        return;
+    }
 
     // Some hosts refuse parameter changes while an instance is being created:
     // never fail the node for that, beginEdit() retries when the panel is opened.
@@ -455,7 +502,7 @@ void SLogMetaRaw::syncMetadata(bool p_Force)
 
     ClipMeta meta;
     std::string status;
-    if (!loadMeta(path, meta, status)) {
+    if (!loadMeta(path, meta, status, p_Force)) {
         m_MetaValid->setValue(false);
         setText(m_Camera, "Metadata non trovati");
         for (int i = 0; i < kDetailCount; ++i) setText(m_Details[i], "—");
@@ -521,6 +568,7 @@ void SLogMetaRaw::updateEnabledness()
 
 void SLogMetaRaw::beginEdit()
 {
+    if (!m_Ready) return;
     try {
         syncMetadata(false);
         refreshNodeInfo();
@@ -530,11 +578,13 @@ void SLogMetaRaw::beginEdit()
 
 void SLogMetaRaw::changedClip(const OFX::InstanceChangedArgs& /*p_Args*/, const std::string& p_ClipName)
 {
+    if (!m_Ready) return;
     if (p_ClipName == kOfxImageEffectSimpleSourceClipName) syncMetadata(false);
 }
 
 void SLogMetaRaw::changedParam(const OFX::InstanceChangedArgs& p_Args, const std::string& p_ParamName)
 {
+    if (!m_Ready) return;
     const bool user = (p_Args.reason == OFX::eChangeUserEdit);
     if (p_ParamName == "reload") {
         syncMetadata(true);
@@ -561,6 +611,7 @@ void SLogMetaRaw::changedParam(const OFX::InstanceChangedArgs& p_Args, const std
 
 bool SLogMetaRaw::buildParams(double p_Time, DevelopParams& p, std::string* p_NodeInfo)
 {
+    if (!m_Ready) { p.bypass = 1; return false; }
     p = DevelopParams();
 
     // colour space of the image entering the node
@@ -611,6 +662,11 @@ bool SLogMetaRaw::buildParams(double p_Time, DevelopParams& p, std::string* p_No
 
 bool SLogMetaRaw::isIdentity(const OFX::IsIdentityArguments& p_Args, OFX::Clip*& p_IdentityClip, double& p_IdentityTime)
 {
+    if (!m_Ready) {   // no parameters: hand the image straight through
+        p_IdentityClip = m_SrcClip;
+        p_IdentityTime = p_Args.time;
+        return true;
+    }
     DevelopParams p;
     buildParams(p_Args.time, p);
     const bool neutral = p.bypass || (p.convert == 0 && std::fabs(p.expo - 1.0f) < 1e-6f
@@ -627,6 +683,7 @@ bool SLogMetaRaw::isIdentity(const OFX::IsIdentityArguments& p_Args, OFX::Clip*&
 
 void SLogMetaRaw::render(const OFX::RenderArguments& p_Args)
 {
+    if (!m_Ready || !m_DstClip || !m_SrcClip) return;   // not initialised: leave the image alone
     if (m_DstClip->getPixelDepth() != OFX::eBitDepthFloat || m_DstClip->getPixelComponents() != OFX::ePixelComponentRGBA)
         OFX::throwSuiteStatusException(kOfxStatErrUnsupported);
 
@@ -684,11 +741,19 @@ void SLogMetaRawFactory::describe(OFX::ImageEffectDescriptor& p_Desc)
 }
 
 // A duplicate parameter name crashes the host while it builds the panel: refuse it.
+// The names are claimed per describeInContext() call: the host calls that action once
+// for every supported context, and a set shared between calls would make the second
+// context come out with no parameters at all (and the instance then fails to build).
+static std::set<std::string>& usedNames()
+{
+    static thread_local std::set<std::string> names;
+    return names;
+}
+
 static bool claimName(const std::string& name)
 {
-    static std::set<std::string> used;
-    if (!used.insert(name).second) {
-        fprintf(stderr, "SLogMetaRaw: parametro duplicato \"%s\", ignorato\n", name.c_str());
+    if (!usedNames().insert(name).second) {
+        fprintf(stderr, "S-Log MetaRaw: parametro duplicato \"%s\", ignorato\n", name.c_str());
         return false;
     }
     return true;
@@ -754,6 +819,7 @@ static void hide(T* p, PageParamDescriptor* page)
 
 void SLogMetaRawFactory::describeInContext(OFX::ImageEffectDescriptor& p_Desc, OFX::ContextEnum /*p_Context*/)
 {
+    usedNames().clear();   // one fresh set of parameter names per context
     ClipDescriptor* srcClip = p_Desc.defineClip(kOfxImageEffectSimpleSourceClipName);
     srcClip->addSupportedComponent(ePixelComponentRGBA);
     srcClip->setTemporalClipAccess(false);
