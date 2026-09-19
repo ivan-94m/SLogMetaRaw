@@ -1,0 +1,5 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+find "/Library/Application Support/SLogMetaRaw/lib" -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null
+chmod -R a+rX "/Library/Application Support/SLogMetaRaw"
+exit 0

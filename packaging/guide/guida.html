@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<title>S-Log MetaRaw – guida rapida</title>
+<style>
+  @page { size: A4; margin: 0; }
+  :root { --ink: #1c1f26; --muted: #5b6270; --warm: #e8893a; --cool: #3d7bff; --line: #e3e5ea; --soft: #f6f7f9; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; color: var(--ink);
+         font-size: 8pt; line-height: 1.32; }
+  .page { width: 210mm; height: 297mm; padding: 10mm 12mm 7mm; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 4.5mm; padding-bottom: 3mm;
+           border-bottom: 2px solid transparent; border-image: linear-gradient(90deg, var(--warm), var(--cool)) 1; }
+  header img { width: 18mm; height: 18mm; }
+  h1 { font-size: 18pt; margin: 0; letter-spacing: -0.3px; }
+  .sub { color: var(--muted); font-size: 8.8pt; margin-top: 0.8mm; }
+  h2 { font-size: 9.6pt; margin: 2.8mm 0 1mm; display: flex; align-items: center; gap: 1.8mm; }
+  h2 .n { display: inline-flex; width: 4.8mm; height: 4.8mm; border-radius: 50%; background: var(--ink); color: #fff;
+          font-size: 7.4pt; align-items: center; justify-content: center; }
+  p { margin: 0.8mm 0; }
+  ul, ol { margin: 0.8mm 0; padding-left: 4.5mm; }
+  li { margin: 0.5mm 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3.5mm; }
+  .card { background: var(--soft); border: 1px solid var(--line); border-radius: 2.5mm; padding: 2.4mm 3mm; }
+  .card h3 { margin: 0 0 0.6mm; font-size: 9pt; }
+  .premise { background: linear-gradient(90deg, #fff6ef, #eef4ff); border: 1px solid var(--line);
+             border-radius: 2.5mm; padding: 2.6mm 3.2mm; }
+  code { font-family: "SF Mono", Menlo, monospace; font-size: 8pt; background: #eceef2; padding: 0.2mm 1mm; border-radius: 1mm; }
+  table { width: 100%; border-collapse: collapse; font-size: 7.9pt; }
+  td { padding: 0.75mm 1.3mm; border-bottom: 1px solid var(--line); vertical-align: top; }
+  td:first-child { font-weight: 600; white-space: nowrap; width: 33mm; }
+  .note { color: var(--muted); }
+  footer { margin-top: auto; padding-top: 2.4mm; border-top: 1px solid var(--line); display: flex; justify-content: space-between;
+           color: var(--muted); font-size: 8pt; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <img src="icon.png" alt="">
+    <div>
+      <h1>S-Log MetaRaw</h1>
+      <div class="sub">Metadata Sony e controlli Camera Raw per DaVinci Resolve · guida rapida · v1.0</div>
+    </div>
+  </header>
+
+  <h2><span class="n">1</span>Perché serve</h2>
+  <div class="premise">
+    Con la scienza del colore e i metadata di ripresa possiamo intervenire sui parametri essenziali delle mirrorless Sony —
+    bilanciamento del bianco, esposizione, spazio colore e curva — <b>come se fossero file raw</b>. Dove è possibile, e solo
+    con i profili log (S-Log2 / S-Log3). Le camere salvano quei dati dentro ogni file, ma <b>Resolve li legge solo dagli MXF
+    di FX6 e FX9</b>.
+  </div>
+
+  <h2><span class="n">2</span>I due strumenti</h2>
+  <div class="grid">
+    <div class="card"><h3>Script S-Log MetaRaw &nbsp;<span class="note">tutto il progetto in un colpo solo</span></h3>
+      Legge i dati di ripresa da MP4 e MXF Sony (FX30, FX3, Alpha, a6300, FX6…) e li <b>registra nel Media Pool</b> delle clip
+      selezionate o dell'intero progetto: pannello Metadata, colonne, keyword per le smart bin, data burn, export CSV. Mostra
+      anche tutti i dati letti, come in Catalyst Browse.<br>
+      <b>Workspace › Scripts › S-Log MetaRaw</b></div>
+    <div class="card"><h3>Plugin S-Log MetaRaw &nbsp;<span class="note">clip per clip, in Color</span></h3>
+      Nodo con i controlli del pannello Camera Raw "Sony Video", che Resolve non attiva sugli MP4. <b>Si imposta da solo</b> con i
+      valori di quella clip e la interpreta come è stata registrata: bilanciamento ed esposizione partono dai dati giusti.<br>
+      <b>Effects › OpenFX › S-Log MetaRaw</b></div>
+  </div>
+
+  <h2><span class="n">3</span>Installazione e contenuto</h2>
+  <div class="grid">
+    <div>
+      <ol>
+        <li>Doppio clic su <b>Installa S-Log MetaRaw.pkg</b>. Non è firmato con un certificato Apple: se macOS lo blocca, tasto destro › <b>Apri</b>.</li>
+        <li>Serve la password del Mac, perché il plugin va in una cartella di sistema.</li>
+        <li><b>Riavvia DaVinci Resolve.</b> Per rimuovere tutto: <b>Disinstalla S-Log MetaRaw.command</b>.</li>
+      </ol>
+    </div>
+    <table>
+      <tr><td>Plugin</td><td><code>/Library/OFX/Plugins/SLogMetaRaw.ofx.bundle</code></td></tr>
+      <tr><td>Script</td><td>Fusion › Scripts › Utility di Resolve</td></tr>
+      <tr><td>Libreria</td><td><code>/Library/Application Support/SLogMetaRaw</code></td></tr>
+      <tr><td>Requisiti</td><td>macOS 12+, DaVinci Resolve 21</td></tr>
+    </table>
+  </div>
+
+  <h2><span class="n">4</span>Come si usa</h2>
+  <ol>
+    <li><b>Importa</b> il girato nel Media Pool.</li>
+    <li><b>Workspace › Scripts › S-Log MetaRaw</b>: scegli l'origine (clip selezionate, bin o tutto il Media Pool),
+        poi <b>1 · Leggi metadata</b> e <b>2 · Scrivi in Resolve</b>.</li>
+    <li><b>Pagina Color</b>: metti <b>S-Log MetaRaw</b> come primo nodo, prima di CST e LUT. Porta Color Temp, Tint ed Exposure ai
+        valori di ripresa, dove l'immagine non cambia. Copiandolo su un'altra clip si reimposta con i dati di quella clip.</li>
+  </ol>
+
+  <h2><span class="n">5</span>I controlli del plugin</h2>
+  <table>
+    <tr><td>Decode Using</td><td><i>Clip</i> usa i controlli; <i>Camera metadata</i> riporta alla ripresa e ingrigisce i controlli.</td></tr>
+    <tr><td>White Balance</td><td><i>As shot</i> = valori di camera; preset Daylight, Cloudy, Shade, Tungsten, Fluorescent, Flash; muovendo gli slider diventa <i>Custom</i>.</td></tr>
+    <tr><td>Color Temp · Tint</td><td>Bilanciamento in luce lineare con adattamento cromatico, a partire dal bianco di ripresa.</td></tr>
+    <tr><td>Exposure</td><td>In EI: EI doppio = +1 stop.</td></tr>
+    <tr><td>Color Space · Gamma</td><td>Come un Color Space Transform: <i>Timeline</i> non converte; le altre scelte convertono (Rec.709, Gamma 2.4, SLog3, ACES…).</td></tr>
+    <tr><td>Toni</td><td>Shadows, Highlights, Color Boost, Saturation, Contrast.</td></tr>
+    <tr><td>Rileggi metadata</td><td>Rilegge la clip e riporta tutto ai valori di camera.</td></tr>
+    <tr><td>Avanzate</td><td>Spazio d'ingresso rilevato e stato. <b>Dati di ripresa</b>: obiettivo, focale, diaframma, fuoco, shutter, ISO/EI, bilanciamento, data level, fps, ND, LUT di camera.</td></tr>
+  </table>
+
+  <h2><span class="n">6</span>Da sapere</h2>
+  <ul>
+    <li>I file originali <b>non vengono mai modificati</b>: niente transcodifica, niente rewrap.</li>
+    <li>FX6 e FX9 in MXF hanno già il pannello Camera Raw nativo: S-Log MetaRaw serve per gli MP4 (XAVC S, S-I, HS).</li>
+    <li>Serve un profilo <b>S-Log2 o S-Log3</b>; con altri profili il nodo resta neutro. Se la camera non registra i Kelvin
+        (per esempio l'a6300) il valore è stimato dal preset e segnalato nel pannello.</li>
+    <li><b>Testato solo su DaVinci Resolve Studio 21 (macOS), da Ivan</b>: sulle precedenti non è stato provato (il plugin
+        usa funzioni introdotte con Resolve 21).</li>
+    <li><b>Progetto hobbistico e indipendente</b>, distribuito così com'è, senza garanzie né responsabilità per l'uso
+        professionale. Codice aperto, licenza <b>GNU GPL v3</b>: verificalo, provalo, modificalo.</li>
+  </ul>
+
+  <footer>
+    <span>S-Log MetaRaw 1.0 · Ivan Mazzone + Claude · github.com/ivan-94m · @ivan_94m</span>
+    <span>Licenza GNU GPL v3 · Non affiliato a Sony né a Blackmagic Design</span>
+  </footer>
+</div>
+</body>
+</html>

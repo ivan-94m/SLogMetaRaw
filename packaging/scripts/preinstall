@@ -1,0 +1,21 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Clean up a developer install (symlinked plugin, per-user launcher and lib_path) so the
+# system install is the only copy Resolve and the plugin use.
+PLUGIN="/Library/OFX/Plugins/SLogMetaRaw.ofx.bundle"
+if [[ -L "$PLUGIN" ]]; then rm -f "$PLUGIN"; fi
+# previous name of this project (SonyMeta), so nothing is left behind after the rename
+rm -rf "/Library/OFX/Plugins/SonyMetaRAW.ofx.bundle" "/Library/Application Support/SonyMeta" \
+       "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/SonyMeta.py"
+pkgutil --forget com.sonymeta.pkg >/dev/null 2>&1
+CONSOLE_USER="$(stat -f%Su /dev/console 2>/dev/null)"
+if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" ]]; then
+  HOME_DIR="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+  if [[ -n "$HOME_DIR" ]]; then
+    SCRIPTS_DIR="$HOME_DIR/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility"
+    rm -f "$SCRIPTS_DIR/S-Log MetaRaw.py" "$SCRIPTS_DIR/SLogMetaRaw.py" "$SCRIPTS_DIR/SonyMeta.py"
+    rm -f "$HOME_DIR/Library/Application Support/SLogMetaRaw/lib_path"
+    rm -rf "$HOME_DIR/Library/Application Support/SonyMeta"
+  fi
+fi
+exit 0

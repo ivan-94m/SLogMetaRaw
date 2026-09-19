@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>S-Log MetaRaw 1.0</title>
+    <background file="background.png" alignment="bottomleft" scaling="none"/>
+    <background-darkAqua file="background.png" alignment="bottomleft" scaling="none"/>
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <license file="license.txt"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+    <domains enable_localSystem="true"/>
+    <os-version min="12.0"/>
+    <choices-outline>
+        <line choice="default"/>
+    </choices-outline>
+    <choice id="default" title="S-Log MetaRaw">
+        <pkg-ref id="com.slogmetaraw.pkg"/>
+    </choice>
+    <pkg-ref id="com.slogmetaraw.pkg" version="1.0.0" onConclusion="none">SLogMetaRaw-component.pkg</pkg-ref>
+</installer-gui-script>
