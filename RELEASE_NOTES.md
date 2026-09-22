@@ -196,6 +196,46 @@ Recovery` non lo recupera**, perché è il peso fra i due rami *dentro* la press
 gira prima della conversione. Sono due stadi in fila; se servirà una leva su questa
 croma dovrà essere un controllo suo.
 
+### E la pressa lavora nello spazio che stai scrivendo
+
+«Il picco che un segnale Rec.709 contiene» è un'affermazione **su** il Rec.709: non
+vuol dire niente finché non ci sei dentro. La conversione di Color Space / Gamma
+avviene quindi **prima** della pressa, non dopo. Girando prima, la pressa giudicava
+un colore saturo dalla sua norma nel gamut del nodo, dove era ordinario, e la matrice
+poteva comunque metterlo sopra il bianco di destinazione: su un LED di scena a
+Highlights −100 usciva a **1,088** invece dell'1,0 che il controllo promette. Ora
+atterra a **0,935**, e un magenta saturo passa da 1,200 a 0,944.
+
+Non si muove nient'altro: ogni neutro — grigio, bianco 90%, ombre — esce **identico**
+a prima con qualsiasi combinazione di controlli, perché un grigio è un grigio in tutti
+questi spazi. E con Color Space e Gamma su *Timeline*, cioè il default, non c'è
+conversione e gira esattamente il codice di prima: **per chi non tocca quei due menu
+non cambia assolutamente nulla**.
+
+Il contrasto è rimasto dov'era, ed è una scelta misurata: spostarlo non guadagna nulla
+sul problema e in cambio muove l'incarnato di 0,048 con Contrast +50.
+
+### Non si desatura più verso un grigio negativo
+
+Difetto trovato verificando il riordino, e che c'era già da prima: la saturazione
+faceva il blend verso la luminanza Y, negativa per un pixel molto fuori dalla
+destinazione. Tirando i tre canali verso un grigio negativo finivano sotto zero tutti
+e tre insieme, e un pixel senza alcun canale positivo non ha un acromatico rispetto a
+cui misurare — quindi passava com'era. Misurato: **593 pixel negativi su 100.000**
+sviluppi casuali. Ora il grigio verso cui si desatura non può essere negativo.
+
+È la stessa classe di difetto che era stata tolta dallo stadio di tono; era rimasta
+qui. La cura è un pavimento a zero e **non** la power norm, che su un rosso saturo
+vale 0,49 contro 0,15 di Y e spingerebbe i canali ancora più fuori.
+
+**La garanzia, enunciata com'è vera**: un pixel con un massimo positivo nello spazio
+in cui si scrive esce senza canali negativi — 0 su 199.850. Non «c'era luce nel file»:
+un valore sotto il punto di nero della curva decodifica già negativo su due canali e
+una conversione può portare sotto zero anche il terzo (13 su 150.000 verso DaVinci WG,
+nessuno verso Rec.709). Quelli passano invariati attorno a −0,008 lineare, che è
+*sopra* il −0,014 del code zero di S-Log3, e si ricodificano in un code legale quasi
+nero. Clamparli nasconderebbe un problema di decodifica o di data level.
+
 ### Clip lunghe: i metadata di acquisizione non venivano trovati
 
 Segnalato su una clip FX6 di **1h 37m** in 4K: nel nodo tutti i cursori grigi,
@@ -263,7 +303,7 @@ arrivare alla stessa risposta.
 
 ### Verifica
 
-- **268 test**, tutti verdi.
+- **275 test**, tutti verdi.
 - Il C++ in float32 coincide con il riferimento Python in float64 su **tutta** la
   corsa di ogni controllo: il fuzz andava a metà scala, adesso va da estremo a
   estremo.

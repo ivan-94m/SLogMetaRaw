@@ -367,15 +367,19 @@ def develop(rgb, node_space, node_gamma, shot=(5600, 0, 800),
         if cn > 1e-6:
             kk = 2 ** (math.log2(cn / GREY) * contrast)
             rgbn = [c * kk for c in rgbn]
-    rgbn = tone(rgbn, node_space, highlights, shadows, chroma_recover,
-                tank_top(node_gamma) if e_top is None else e_top)
-    mx, mn = max(rgbn), min(rgbn)
+    # the conversion happens BEFORE the press, so the press and the saturation work
+    # in the space being written: "the peak a Rec.709 signal holds" means nothing
+    # until we are in Rec.709. Neutrals are unaffected, chromatic pixels are not.
+    convert = out_space != node_space or out_gamma != node_gamma
+    sp = out_space if convert else node_space
+    g = out_gamma if convert else node_gamma
+    o = mul(MATS[out_space][1], mul(MATS[node_space][0], rgbn)) if convert else rgbn
+    o = tone(o, sp, highlights, shadows, chroma_recover,
+             tank_top(node_gamma) if e_top is None else e_top)
+    mx, mn = max(o), min(o)
     sat_now = min(max((mx - mn) / mx, 0), 1) if mx > 1e-6 else 0
     sf = (1 + saturation) * (1 + boost * (1 - sat_now))
-    yl = mul(MATS[node_space][0], rgbn)[1]
-    rgbn = [yl + (c - yl) * sf for c in rgbn]
-    convert = out_space != node_space or out_gamma != node_gamma
-    o = rgbn if not convert else mul(MATS[out_space][1], mul(MATS[node_space][0], rgbn))
-    g = node_gamma if not convert else out_gamma
+    yl = max(mul(MATS[sp][0], o)[1], 0.0)   # never desaturate towards a negative grey
+    o = [yl + (c - yl) * sf for c in o]
     o = gamut_compress(o)      # last thing before the encode, on linear values
     return [encode1(c, g) for c in o]

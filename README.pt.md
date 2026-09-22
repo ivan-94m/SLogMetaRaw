@@ -218,7 +218,7 @@ Tudo acontece em **luz linear**, no gamut que entra no nó, nesta ordem:
    sinal que ali não pode existir — um LED de palco saturado convertido de S-Gamut3.Cine para Rec.709 mede R −0,125,
    G −0,292 — e nenhum controle de tom pode consertar isso, porque a prensa multiplica os três canais por um fator
    *positivo*. A distância de cada canal em relação ao acromático é comprimida na direção de uma assíntota que nunca
-   alcança, que é exatamente o ponto em que aquele canal seria zero: **o nó não pode emitir um canal negativo**. Dentro do
+   alcança, que é exatamente o ponto em que aquele canal seria zero: **um pixel com um canal positivo no espaço em que se escreve não pode sair com um negativo**. Dentro do
    gamut não faz nada: uma cor que já está dentro fica abaixo do limiar e sai bit a bit como entrou.
 
 As funções de transferência seguem as definições publicadas: **S-Log, S-Log2 e S-Log3** dos documentos da Sony,

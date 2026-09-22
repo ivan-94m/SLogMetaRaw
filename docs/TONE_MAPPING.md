@@ -459,6 +459,49 @@ colore attraversa il bordo del gamut. E il canale massimo non si muove mai: viag
 solo la croma, mai il livello, così tutto quello che la pressa ha deciso sulla
 luminosità sopravvive intatto.
 
+### E la pressa lavora nello spazio che stai scrivendo
+
+«Il picco che un segnale Rec.709 contiene» è un'affermazione **su** il Rec.709: non
+vuol dire niente finché non ci sei dentro. Per questo la conversione avviene **prima**
+della pressa. Girando prima, la pressa giudicava un colore saturo dalla sua norma nel
+gamut del **nodo**, dove era ordinario, e la matrice poteva comunque metterlo sopra il
+bianco di destinazione: misurato su un LED di scena a Highlights −100, **1,088**
+invece dell'1,0 che il controllo promette. Da qui atterra a **0,935**.
+
+Non si muove nient'altro. Ogni neutro esce bit per bit come prima a qualsiasi
+impostazione di qualsiasi controllo — un grigio è un grigio in tutti questi spazi e
+la norma di un neutro è il neutro stesso. Con Color Space e Gamma su *Timeline*, cioè
+il default, non c'è conversione e gira esattamente il codice di prima.
+
+Il contrasto invece **non** si è spostato, ed è una scelta misurata: spostarlo non
+cambia nulla sul problema (il LED finisce a 0,935 identico) e in cambio muove
+l'incarnato di 0,048 con Contrast +50. Nessuna resa, più rischio.
+
+### Non si desatura verso un grigio negativo
+
+Difetto trovato mentre si verificava il riordino, e **preesistente**: la saturazione
+faceva il blend verso la luminanza Y, che per un pixel molto fuori dalla destinazione
+è negativa. Tirando tutti e tre i canali verso un grigio negativo, finivano sotto zero
+tutti e tre insieme — e un pixel senza alcun canale positivo non ha un acromatico
+rispetto a cui misurare, quindi il compressore lo lasciava passare. Misurato:
+**593 pixel negativi su 100.000** sviluppi casuali.
+
+La cura è un pavimento a zero, **non** la power norm: la norma è molto più *grande*
+di Y su un colore saturo — 0,49 contro 0,15 su un rosso Rec.709 — quindi desaturare
+verso di essa spingerebbe i canali più fuori, non meno. Ogni colore con `Y ≥ 0`, cioè
+ogni colore dentro al gamut, non se ne accorge.
+
+### Dove la garanzia si ferma
+
+Enunciata com'è vera: **un pixel con un massimo positivo nello spazio in cui si
+scrive esce senza canali negativi.** Non «c'era luce nel file»: un valore al di sotto
+del punto di nero della curva decodifica già negativo su due canali, e una conversione
+può portare sotto zero anche il terzo — misurati 13 pixel su 150.000 verso DaVinci WG
+e nessuno verso Rec.709. Quelli passano invariati, attorno a −0,008 in lineare, che è
+**sopra** il −0,014 a cui decodifica il code zero di S-Log3: si ricodificano in un
+code legale quasi nero. Clamparli nasconderebbe un problema di decodifica o di data
+level invece di mostrarlo.
+
 ### Il compromesso, dichiarato
 
 Una soglia sotto 1 tocca anche colori che stanno legittimamente dentro. A **0,7** —

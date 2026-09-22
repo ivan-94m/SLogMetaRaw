@@ -181,5 +181,110 @@ class TheDeclaredTrade(unittest.TestCase):
         self.assertEqual(cpp, {'THRESH': dm.GAMUT_THRESH, 'KNEE': dm.GAMUT_KNEE})
 
 
+class ThePressWorksInTheSpaceBeingWritten(unittest.TestCase):
+    """"The peak a Rec.709 signal holds" is a statement about Rec.709: it means
+    nothing until we are in it. The conversion therefore happens before the press,
+    so Highlights -100 delivers what it promises in the space chosen for output."""
+
+    def out(self, lin, dst, **kw):
+        cv = [dm.encode1(c, SLOG3) for c in lin]
+        return dm.develop(cv, SG3C, SLOG3, out_space=dst, out_gamma=1, **kw)
+
+    def test_minus_one_hundred_brings_a_stage_light_inside_the_white(self):
+        for name, px in (('LED blu', BLUE_LED), ('magenta', [1.20, 0.05, 1.40])):
+            self.assertGreater(max(self.out(px, R709)), 1.0, name)          # senza pressa
+            self.assertLessEqual(max(self.out(px, R709, highlights=-1.0)), 1.0, name)
+
+    def test_every_neutral_is_untouched_by_the_move(self):
+        """The reorder may only change chromatic pixels. A grey is a grey in any of
+        these spaces and the norm of a neutral is the neutral itself, so the press
+        cannot see a difference - and this asserts it rather than assuming it."""
+        for ev in (-6, -4, -2, 0, 2, 4):
+            v = 0.18 * 2 ** ev
+            for kw in ({}, {'highlights': -1.0}, {'highlights': 1.0}, {'shadows': 1.0},
+                       {'contrast': 0.5, 'saturation': 0.5}):
+                a = self.out([v, v, v], R709, **kw)
+                tol = 1e-7 * max(1.0, abs(a[0]))     # round trip fra matrici
+                self.assertAlmostEqual(a[0], a[1], delta=tol)
+                self.assertAlmostEqual(a[1], a[2], delta=tol)
+
+    def test_with_the_output_on_timeline_nothing_changed_at_all(self):
+        """The default. No conversion means the node's own space is the one being
+        written, so this is exactly the code that ran before the move."""
+        for cv in (0.1, 0.3, 0.41, 0.6, 0.9, 1.0):
+            for tilt in (1.0, 0.8, 0.5):
+                px = [cv, cv * tilt, cv * tilt * 0.9]
+                for kw in ({}, {'highlights': -1.0}, {'highlights': 1.0},
+                           {'shadows': 1.0}, {'saturation': 1.0}):
+                    self.assertEqual(dm.develop(px, SG3C, SLOG3, **kw),
+                                     dm.develop(px, SG3C, SLOG3, out_space=SG3C,
+                                                out_gamma=SLOG3, **kw))
+
+
+class DesaturatingTowardsANegativeGrey(unittest.TestCase):
+    """The defect this floor exists for, and it predates the move: the saturation
+    stage blended towards the XYZ luminance, which is negative for a pixel far
+    outside the destination. Pulling all three channels towards a negative grey sent
+    every one of them below zero at once - and a pixel with no positive channel has
+    no achromatic for the compressor to measure against, so it came through as it
+    was. Measured: 593 negative pixels in 100000 random developments."""
+
+    def test_a_pixel_with_a_positive_channel_never_comes_out_negative(self):
+        """The guarantee, stated the way the compressor actually works: it needs an
+        achromatic to measure against, which means a positive maximum IN THE SPACE
+        BEING WRITTEN. That is the condition, not "there was light in the file" -
+        see the next test for the difference, which is real but tiny."""
+        rnd = random.Random(77)
+        checked = 0
+        for _ in range(40000):
+            px = [rnd.uniform(0.0, 1.0) for _ in range(3)]
+            lin = [dm.decode1(c, SLOG3) for c in px]
+            for dst in (R709, DWG):
+                if max(to(dst, lin)) <= 0.0:
+                    continue
+                checked += 1
+                o = dm.develop(px, SG3C, SLOG3, out_space=dst, out_gamma=1,
+                               highlights=rnd.uniform(-1, 1), shadows=rnd.uniform(-1, 1),
+                               saturation=rnd.uniform(-1, 1), contrast=rnd.uniform(-1, 1),
+                               boost=rnd.uniform(-1, 1))
+                self.assertGreaterEqual(min(o), -1e-12, '%s -> %s' % (px, o))
+        self.assertGreater(checked, 70000)
+
+    def test_where_the_guarantee_stops_and_why_it_does_not_matter(self):
+        """A pixel sitting at or below the curve's own black point decodes negative
+        on two channels already, and a conversion can take the third under as well:
+        measured, 13 in 150000 towards DaVinci WG and none towards Rec.709. It has
+        no achromatic, so it passes through - and clamping it would hide a decode or
+        data-level problem instead of showing one. The magnitude is around -0.008 in
+        linear, which is ABOVE the -0.014 that S-Log3 code zero decodes to: it
+        re-encodes to a legal near-black code, not to a negative one."""
+        px = [0.0438, 0.0385, 0.0971]
+        lin = [dm.decode1(c, SLOG3) for c in px]
+        self.assertGreater(max(lin), 0.0)                  # a hair of light
+        self.assertLessEqual(max(to(DWG, lin)), 0.0)       # and none of it survives
+        o = dm.develop(px, SG3C, SLOG3, out_space=DWG, out_gamma=1)
+        self.assertLess(max(abs(v) for v in o), 0.02)
+        self.assertGreater(min(o), dm.decode1(0.0, SLOG3))      # sopra il nero della curva
+        for v in dm.develop(px, SG3C, SLOG3, out_space=DWG, out_gamma=SLOG3):
+            self.assertGreater(v, 0.0, 'ricodificato deve essere un code legale')
+
+    def test_a_code_value_below_the_black_point_is_left_alone(self):
+        """S-Log3 black is code 95/1023; below it the curve decodes negative by
+        design. Such a pixel has no light in it and no achromatic, so it passes
+        through - clamping it would hide a decode or data-level problem, and it
+        re-encodes to essentially zero anyway."""
+        px = [0.05, 0.04, 0.01]
+        self.assertLess(max(dm.decode1(c, SLOG3) for c in px), 0.0)
+        out = dm.develop(px, SG3C, SLOG3, out_space=R709, out_gamma=1)
+        for v in out:
+            self.assertLess(abs(v), 0.02, 'in lineare deve restare a ridosso dello zero')
+
+    def test_a_colour_with_positive_luminance_is_not_affected_by_the_floor(self):
+        """Every colour inside the gamut, which is the only place it matters."""
+        for px in (SKIN, GREY, [0.06, 0.12, 0.30], [0.08, 0.15, 0.05]):
+            lin = to(R709, px)
+            self.assertGreater(dm.mul(dm.MATS[R709][0], lin)[1], 0.0)
+
+
 if __name__ == '__main__':
     unittest.main()

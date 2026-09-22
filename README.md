@@ -249,7 +249,7 @@ Everything happens in **linear light**, in the gamut entering the node, in this 
    that cannot exist there — a saturated stage LED converted from S-Gamut3.Cine to Rec.709 measures R −0.125, G −0.292 —
    and no tone control can repair it, because the press multiplies all three channels by one *positive* factor. Each
    channel's distance from the achromatic is compressed towards an asymptote it never reaches, which is exactly the point
-   at which that channel would be zero: **the node cannot emit a negative channel**. Inside the gamut it does nothing at
+   at which that channel would be zero: **a pixel with a positive channel in the space being written cannot come out with a negative one**. Inside the gamut it does nothing at
    all — not "very little", nothing: an in-gamut colour is below the threshold and comes out bit for bit as it went in.
 
 Transfer functions follow the published definitions: **S-Log, S-Log2 and S-Log3** from the Sony papers, **DaVinci

@@ -585,6 +585,15 @@ SM_FN float sm_gamut_one(float v, float ac, float t, float a) {
     return ac * (1.0f - d);
 }
 
+// The guarantee, stated the way this actually works: a pixel with a positive
+// maximum IN THE SPACE BEING WRITTEN comes out with no negative channel. That is
+// the condition, not "there was light in the file": a value at or below the curve's
+// own black point already decodes negative on two channels, and a conversion can
+// take the third under as well - measured, 13 pixels in 150000 towards DaVinci WG
+// and none towards Rec.709. Those have no achromatic to measure against and pass
+// through as they are, at about -0.008 in linear, which is ABOVE the -0.014 that
+// S-Log3 code zero decodes to: it re-encodes to a legal near-black code. Clamping
+// them would hide a decode or data level problem instead of showing one.
 SM_FN SMf3 sm_gamut_compress(SMf3 c) {
     float ac = SM_MAX(c.x, SM_MAX(c.y, c.z));
     if (!(ac > 1e-9f)) return c;         // nothing positive to measure against
@@ -633,20 +642,50 @@ SM_FN SMf3 sm_develop(SMf3 in, DevelopParams p) {
         }
     }
 
-    // press, toe and chroma: last luminance move, so nothing can push past it
-    rgb = sm_tone(rgb, p);
+    // Color Space / Gamma: like a Color Space Transform from the node space. It
+    // happens HERE, before the press, so that the press and the saturation work in
+    // the space the image is actually being written to.
+    //
+    // The press says where the top of the tank lands, and "the peak a Rec.709 signal
+    // holds" is a statement about Rec.709 - it means nothing until we are in it. Run
+    // before the conversion, the press judged a saturated colour by its norm in the
+    // NODE's gamut, where it was unremarkable, and the matrix could then put it above
+    // the destination's white anyway: measured on a stage LED at Highlights -100,
+    // 1.088 instead of the 1.0 the control promises. From here it lands at 0.935.
+    //
+    // Nothing else moves. Every neutral comes out bit for bit as before at every
+    // setting of every control, because a grey is a grey in any of these spaces and
+    // the norm of a neutral is the neutral itself. Only chromatic pixels see a
+    // difference, and only because they are finally being judged where it counts.
+    // With Color Space and Gamma on Timeline - the default - there is no conversion
+    // at all and this is exactly the code that ran before.
+    const int outSpace = p.convert == 0 ? p.nodeSpace : p.outSpace;
+    const int outGamma = p.convert == 0 ? p.nodeGamma : p.outGamma;
+    SMf3 o = p.convert == 0 ? rgb : sm_from_xyz(sm_to_xyz(rgb, p.nodeSpace), outSpace);
 
-    // saturation and color boost (vibrance) around luminance, in the node gamut
-    float mx = SM_MAX(rgb.x, SM_MAX(rgb.y, rgb.z));
-    float mn = SM_MIN(rgb.x, SM_MIN(rgb.y, rgb.z));
+    // press, toe and chroma: last luminance move, so nothing can push past it
+    o = sm_tone(o, p);
+
+    // saturation and color boost (vibrance) around luminance, in the output gamut
+    float mx = SM_MAX(o.x, SM_MAX(o.y, o.z));
+    float mn = SM_MIN(o.x, SM_MIN(o.y, o.z));
     float satNow = mx > 1e-6f ? sm_clamp((mx - mn) / mx, 0.0f, 1.0f) : 0.0f;
     float sf = (1.0f + p.saturation) * (1.0f + p.boost * (1.0f - satNow));
-    float yl = sm_to_xyz(rgb, p.nodeSpace).y;
-    rgb = smf3(yl + (rgb.x - yl) * sf, yl + (rgb.y - yl) * sf, yl + (rgb.z - yl) * sf);
-
-    // Color Space / Gamma: like a Color Space Transform from the node space
-    SMf3 o = p.convert == 0 ? rgb : sm_from_xyz(sm_to_xyz(rgb, p.nodeSpace), p.outSpace);
-    const int outGamma = p.convert == 0 ? p.nodeGamma : p.outGamma;
+    // The grey this desaturates towards cannot itself be negative. Y has a negative
+    // blue coefficient in every wide gamut here, so a pixel sitting far outside the
+    // destination has Y < 0 - and pulling all three channels towards a negative grey
+    // sends every one of them below zero at once. The max then goes with them, and a
+    // pixel with no positive channel has no achromatic for sm_gamut_compress to
+    // measure against, so it comes through as it is. Measured before this line:
+    // 593 negative pixels in 100000 random developments. It is the same defect that
+    // was taken out of the tone stage, left behind here.
+    //
+    // A floor of zero, and not the power norm: the norm is far LARGER than Y on a
+    // saturated colour (0.49 against 0.15 on a Rec.709 red), so desaturating towards
+    // it would push the channels further out, not less. Every colour with Y >= 0 -
+    // which is every colour inside the gamut - is untouched by this.
+    float yl = SM_MAX(sm_to_xyz(o, outSpace).y, 0.0f);
+    o = smf3(yl + (o.x - yl) * sf, yl + (o.y - yl) * sf, yl + (o.z - yl) * sf);
 
     // Last thing before the encode, on linear values, whichever branch we took:
     // whatever we are writing to, write something that can exist there. It runs on

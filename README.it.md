@@ -253,7 +253,7 @@ Tutto avviene in **luce lineare**, nel gamut che entra nel nodo, in quest'ordine
    segnale che lì non può esistere — un LED di scena saturo convertito da S-Gamut3.Cine a Rec.709 misura R −0,125,
    G −0,292 — e nessun controllo di tono può ripararlo, perché la pressa moltiplica i tre canali per un fattore
    *positivo*. La distanza di ogni canale dall'acromatico viene compressa verso un asintoto che non raggiunge mai, che è
-   esattamente il punto in cui quel canale varrebbe zero: **il nodo non può emettere un canale negativo**. Dentro al
+   esattamente il punto in cui quel canale varrebbe zero: **un pixel con un canale positivo nello spazio in cui si scrive non può uscire con uno negativo**. Dentro al
    gamut non fa nulla — non «pochissimo», nulla: un colore già dentro sta sotto la soglia ed esce bit per bit come è
    entrato.
 
