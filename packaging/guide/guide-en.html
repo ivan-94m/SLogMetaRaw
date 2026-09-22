@@ -100,7 +100,7 @@
     <tr><td>Color Temp · Tint</td><td>White balance in linear light with chromatic adaptation, starting from the as-shot white.</td></tr>
     <tr><td>Exposure</td><td>In EI: double the EI = +1 stop.</td></tr>
     <tr><td>Color Space · Gamma</td><td>Like a Color Space Transform: <i>Timeline</i> does not convert; the other choices do (Rec.709, Gamma 2.4, SLog3, ACES…).</td></tr>
-    <tr><td>Toni (tones)</td><td><b>Highlights</b> negative is a filmic shoulder: it never clips and leaves the midtones alone. <b>Shadows</b> opens the shadows without lifting black. <b>Color Recovery</b> hands colour back to the recovered highlights and takes chroma out of the opened shadows. Plus Color Boost, Saturation, Contrast.</td></tr>
+    <tr><td>Toni (tones)</td><td><b>Highlights</b> says, in stops, where the top of the recorded container lands: negative presses it down (at &minus;100 onto the Rec.709 peak), positive stretches the top of the scale. It never clips and leaves the midtones alone. <b>Shadows</b> opens the shadows without lifting black. <b>Color Recovery</b> sets how much colour the press gives back: right keeps the scene colour, left goes towards film. Plus Color Boost, Saturation, Contrast.</td></tr>
     <tr><td>False color</td><td>Three measuring views, one per control: exposure, temperature and tint. They replace the image: switch them off before you render.</td></tr>
     <tr><td>Rileggi metadata</td><td>Re-reads the clip and returns everything to the camera values.</td></tr>
     <tr><td>Avanzate</td><td>Detected input space, <b>Data level</b> (corrects the code-value scale when Resolve gets it wrong) and status. <b>Dati di ripresa</b>: lens, focal length, iris, focus, shutter, ISO/EI, white balance, data level, fps, ND, camera LUT.</td></tr>

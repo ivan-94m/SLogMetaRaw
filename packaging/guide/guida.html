@@ -99,7 +99,7 @@
     <tr><td>Color Temp · Tint</td><td>Bilanciamento in luce lineare con adattamento cromatico, a partire dal bianco di ripresa.</td></tr>
     <tr><td>Exposure</td><td>In EI: EI doppio = +1 stop.</td></tr>
     <tr><td>Color Space · Gamma</td><td>Come un Color Space Transform: <i>Timeline</i> non converte; le altre scelte convertono (Rec.709, Gamma 2.4, SLog3, ACES…).</td></tr>
-    <tr><td>Toni</td><td><b>Highlights</b> in negativo è una spalla filmica: non clippa mai e non tocca i mezzitoni. <b>Shadows</b> apre l'ombra senza alzare il nero. <b>Color Recovery</b> restituisce colore alle alte luci recuperate e toglie croma alle ombre aperte. Più Color Boost, Saturation, Contrast.</td></tr>
+    <tr><td>Toni</td><td><b>Highlights</b> dice in stop dove atterra il tetto del contenitore registrato: in negativo lo preme (a &minus;100 sul picco del Rec.709), in positivo stira la cima della scala. Non clippa mai e non tocca i mezzitoni. <b>Shadows</b> apre l'ombra senza alzare il nero. <b>Color Recovery</b> decide quanto colore restituisce la pressa: a destra tiene il colore di scena, a sinistra va verso la pellicola. Più Color Boost, Saturation, Contrast.</td></tr>
     <tr><td>False color</td><td>Tre viste di misura, una per controllo: esposizione, temperatura e tint. Sostituiscono l'immagine: spegnile prima di renderizzare.</td></tr>
     <tr><td>Rileggi metadata</td><td>Rilegge la clip e riporta tutto ai valori di camera.</td></tr>
     <tr><td>Avanzate</td><td>Spazio d'ingresso rilevato, <b>Data level</b> (corregge la scala di code value quando Resolve la sbaglia) e stato. <b>Dati di ripresa</b>: obiettivo, focale, diaframma, fuoco, shutter, ISO/EI, bilanciamento, data level, fps, ND, LUT di camera.</td></tr>
