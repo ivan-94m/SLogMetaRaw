@@ -96,18 +96,148 @@ def white_xyz(k, tint):
     return [x / y, 1.0, (1 - x - y) / y]
 
 
+def fix_levels(lin, node_space, level_space, level_gamma, gain, offset):
+    """Reference for sm_fix_levels: affine remap of the code values, done in the
+    camera encoding, reached by an exact round-trip from whatever the node is in."""
+    same = level_space == node_space
+    cam = lin if same else mul(MATS[level_space][1], mul(MATS[node_space][0], lin))
+    cv = [encode1(c, level_gamma) * gain + offset for c in cam]
+    cam = [decode1(c, level_gamma) for c in cv]
+    return cam if same else mul(MATS[node_space][1], mul(MATS[level_space][0], cam))
+
+
+# --- tone: shoulder, toe and chroma (sm_tone* of DevelopMath.h) -------------
+
+TONE_KNEE, TONE_PURITY, TONE_PURITY_GROW = 3.0, 0.5, 1.0
+TONE_SHAD_MID, TONE_SHAD_W, TONE_SHAD_AMP = -4.0, 1.8, 1.5
+TONE_HIGH_MID, TONE_HIGH_W, TONE_HIGH_AMP = 3.5, 1.6, 1.0
+
+
+def tone_norm(c):
+    """Power norm: norm(x, x, x) = x exactly, and smooth, unlike max(RGB)."""
+    den = sum(v * v for v in c)
+    return sum(abs(v) ** 3 for v in c) / den if den > 1e-12 else 0.0
+
+
+def tone_bell(ev, mid, width):
+    z = (ev - mid) / width
+    return math.exp(-z * z)
+
+
+def tone(rgb, node_space, highlights, shadows, chroma_recover):
+    norm = tone_norm(rgb)
+    if norm <= 1e-6:
+        return list(rgb)
+    ev = math.log2(norm / 0.18)
+    lift = (shadows * TONE_SHAD_AMP * tone_bell(ev, TONE_SHAD_MID, TONE_SHAD_W)
+            + max(highlights, 0.0) * TONE_HIGH_AMP * tone_bell(ev, TONE_HIGH_MID, TONE_HIGH_W))
+    t = 2 ** lift
+    a = max(-highlights, 0.0)
+    if a > 0.0:
+        # soft-minimum form, see sm_tone: never raises a large number to TONE_KNEE
+        L = norm * t
+        t = (L ** -TONE_KNEE + a ** TONE_KNEE) ** (-1.0 / TONE_KNEE) / norm
+    out = [c * t for c in rgb]
+    k = TONE_PURITY * (1.0 + TONE_PURITY_GROW * max(1.0 - t, 0.0)) * 2 ** (-chroma_recover)
+    purity = t ** k if t < 1.0 else 1.0
+    purity -= max(chroma_recover, 0.0) * max(lift, 0.0) * 0.4
+    if purity < 1.0:
+        purity = min(max(purity, 0.0), 1.0)
+        yl = mul(MATS[node_space][0], out)[1]
+        out = [yl + (c - yl) * purity for c in out]
+    return out
+
+
+# --- false colour (sm_fc_* of DevelopMath.h) --------------------------------
+
+def neutral_uv(shot_k, shot_t, k, t):
+    """CIE 1960 uv a neutral pixel lands on after the white balance, as neutralUV()."""
+    d65 = [0.95046, 1.0, 1.08906]
+    ws, wt = mul(BR, white_xyz(shot_k, shot_t)), mul(BR, white_xyz(k, t))
+    r = [ws[i] / wt[i] for i in range(3)]
+    lms = mul(BR, d65)
+    xyz = mul(BRI, [lms[i] * r[i] for i in range(3)])
+    nwy = mul(BRI, [mul(BR, d65)[i] * r[i] for i in range(3)])[1]
+    X, Y, Z = [c / nwy for c in xyz]
+    d = X + 15 * Y + 3 * Z
+    return (4 * X / d, 6 * Y / d) if d > 1e-9 else (0.0, 0.0)
+
+
+def fc_calibration(k, t):
+    """(u0, v0, ku, kv, tu, tv): the inverse of the sliders' response, as buildParams."""
+    u0, v0 = neutral_uv(k, t, k, t)
+    uk, vk = neutral_uv(k, t, k + 100.0, t)
+    ut, vt = neutral_uv(k, t, k, t + 5.0)
+    a, c = (uk - u0) / 100.0, (vk - v0) / 100.0
+    b, e = (ut - u0) / 5.0, (vt - v0) / 5.0
+    det = a * e - b * c
+    return u0, v0, e / det, -b / det, -c / det, a / det
+
+
+def fc_exposure(ev):
+    if ev >= 5.5: return [0.96, 0.16, 0.10]
+    if ev >= 4.0: return [1.00, 0.88, 0.12]
+    if 0.70 <= ev <= 1.30: return [1.00, 0.56, 0.72]
+    if -0.33 <= ev <= 0.33: return [0.13, 0.82, 0.20]
+    if ev <= -6.0: return [0.42, 0.12, 0.62]
+    if ev <= -4.0: return [0.10, 0.28, 0.88]
+    g = min(max((ev + 6.0) / 11.5, 0.06), 0.92)
+    return [g, g, g]
+
+
+def fc_band(dev, centre, mid, wide, limit, p1, p2, p3, n1, n2, n3, mono):
+    a = abs(dev)
+    # in tolerance, or so far out that it is the object's colour and not a cast
+    if a <= centre or a > limit: return [mono, mono, mono]
+    if dev > 0: return p1 if a <= mid else (p2 if a <= wide else p3)
+    return n1 if a <= mid else (n2 if a <= wide else n3)
+
+
+def false_color(xyz, mode, u, v, ku, kv, tu, tv):
+    ev = math.log2(max(xyz[1], 1e-9) / 0.18)
+    if mode == 1: return fc_exposure(ev)
+    mono = min(max((ev + 6.0) / 11.5, 0.06), 0.92)
+    if ev >= 5.5: return [0.96, 0.16, 0.10]
+    if ev <= -4.0: return [0.11, 0.11, 0.13]
+    d = xyz[0] + 15 * xyz[1] + 3 * xyz[2]
+    if d < 1e-9: return [0.11, 0.11, 0.13]
+    du, dv = 4 * xyz[0] / d - u, 6 * xyz[1] / d - v
+    if mode == 2:
+        return fc_band(-(ku * du + kv * dv), 75.0, 300.0, 1200.0, 2500.0,
+                       [0.55, 0.86, 1.00], [0.15, 0.55, 1.00], [0.09, 0.18, 0.85],
+                       [1.00, 0.88, 0.25], [1.00, 0.55, 0.10], [0.90, 0.20, 0.08], mono)
+    return fc_band(-(tu * du + tv * dv), 2.0, 6.0, 15.0, 30.0,
+                   [0.66, 1.00, 0.62], [0.22, 0.86, 0.26], [0.05, 0.58, 0.10],
+                   [1.00, 0.70, 0.98], [0.92, 0.25, 0.85], [0.62, 0.05, 0.58], mono)
+
+
+def fc_emit(c, node_space, node_gamma, out_space, out_gamma):
+    convert = out_space != node_space or out_gamma != node_gamma
+    space, gamma = (out_space, out_gamma) if convert else (node_space, node_gamma)
+    lin = [decode1(x, 2) for x in c]
+    return [encode1(x, gamma) for x in mul(MATS[space][1], mul(MATS[1][0], lin))]
+
+
 def develop(rgb, node_space, node_gamma, shot=(5600, 0, 800),
             temp=None, tint=None, ei=None, wb_mode=0, out_space=None, out_gamma=None,
-            shadows=0.0, highlights=0.0, contrast=0.0, saturation=0.0, boost=0.0, decode_meta=False):
+            shadows=0.0, highlights=0.0, contrast=0.0, saturation=0.0, boost=0.0, decode_meta=False,
+            level_fix=0, level_space=0, level_gamma=0, level_gain=1.0, level_offset=0.0,
+            fc_mode=0, fc_u=0.0, fc_v=0.0, fc_ku=0.0, fc_kv=0.0, fc_tu=0.0, fc_tv=0.0,
+            chroma_recover=0.0):
     shot_k, shot_t, shot_ei = shot
     temp = shot_k if temp is None else temp
     tint = shot_t if tint is None else tint
     ei = shot_ei if ei is None else ei
     out_space = node_space if out_space is None else out_space
     out_gamma = node_gamma if out_gamma is None else out_gamma
-    if decode_meta:
+    if decode_meta and not level_fix:
         return list(rgb)
-    lin = [decode1(c, node_gamma) * (ei / shot_ei) for c in rgb]
+    lin = [decode1(c, node_gamma) for c in rgb]
+    if level_fix:
+        lin = fix_levels(lin, node_space, level_space, level_gamma, level_gain, level_offset)
+    if decode_meta:   # develop off, data level only
+        return [encode1(c, node_gamma) for c in lin]
+    lin = [c * (ei / shot_ei) for c in lin]
     xyz = mul(MATS[node_space][0], lin)
     k, t = (PRESETS[wb_mode], 0.0) if wb_mode in PRESETS else (temp, tint)
     ws, wt = mul(BR, white_xyz(shot_k, shot_t)), mul(BR, white_xyz(k, t))
@@ -117,15 +247,17 @@ def develop(rgb, node_space, node_gamma, shot=(5600, 0, 800),
     wl = mul(BR, [0.95046, 1.0, 1.08906])
     nwy = mul(BRI, [wl[i] * r[i] for i in range(3)])[1]
     xyz = [c / nwy for c in xyz]
+    if fc_mode:   # measured before the trims below, so it answers only to the three controls
+        return fc_emit(false_color(xyz, fc_mode, fc_u, fc_v, fc_ku, fc_kv, fc_tu, fc_tv),
+                       node_space, node_gamma, out_space, out_gamma)
     ev = math.log2(max(xyz[1], 1e-6) / 0.18)
-    wh, wsh = min(max(ev / 5, 0), 1), min(max(-ev / 5, 0), 1)
-    kk = 2 ** (ev * contrast + highlights * 2 * wh * wh + shadows * 2 * wsh * wsh)
+    kk = 2 ** (ev * contrast)
     xyz = [c * kk for c in xyz]
-    rgbn = mul(MATS[node_space][1], xyz)
+    rgbn = tone(mul(MATS[node_space][1], xyz), node_space, highlights, shadows, chroma_recover)
     mx, mn = max(rgbn), min(rgbn)
     sat_now = min(max((mx - mn) / mx, 0), 1) if mx > 1e-6 else 0
     sf = (1 + saturation) * (1 + boost * (1 - sat_now))
-    yl = xyz[1]
+    yl = mul(MATS[node_space][0], rgbn)[1]
     rgbn = [yl + (c - yl) * sf for c in rgbn]
     if out_space == node_space and out_gamma == node_gamma:
         return [encode1(c, node_gamma) for c in rgbn]

@@ -9,11 +9,12 @@ The file name hash (FNV-1a 64 of the UTF-8 path) is duplicated in the plugin.
 """
 import json
 import os
+import unicodedata
 
-from . import camera, resolve_io
+from . import camera, datalevel, resolve_io
 
 CACHE_DIR = os.path.expanduser('~/Library/Application Support/SLogMetaRaw/cache')
-VERSION = 2
+VERSION = 3   # 3 adds the data-level fields (level_*)
 
 
 def fnv1a64(text):
@@ -25,7 +26,11 @@ def fnv1a64(text):
 
 
 def cache_path(clip_path):
-    return os.path.join(CACHE_DIR, fnv1a64(clip_path) + '.json')
+    # macOS paths can arrive NFD or NFC: normalise to NFC so the plugin's FNV matches
+    return os.path.join(CACHE_DIR, fnv1a64(unicodedata.normalize('NFC', clip_path)) + '.json')
+
+
+LEVEL_CODE = {datalevel.VIDEO: 0, datalevel.FULL: 1}
 
 
 def _join(*parts):
@@ -42,6 +47,7 @@ def build_record(r):
     except camera.NotSupported:
         cam_gamut, cam_gamma, supported = '', '', 0
     iso = m.get('iso')
+    lv = datalevel.decide(m, m.get('resolve_data_level') or datalevel.AUTO)
 
     focal = d.get('focal_length_mm') or ''
     if focal and d.get('focal_length_35mm'):
@@ -88,8 +94,18 @@ def build_record(r):
         'shutter': shutter or '—',
         'exposure': exposure or '—',
         'white_balance': wb,
-        'color': _join(m.get('color_space'), 'Data level %s' % (m.get('luminance_code_range') or m.get('file_range'))
-                       if (m.get('luminance_code_range') or m.get('file_range')) else ''),
+        'color': _join(m.get('color_space'),
+                       'Data level %s' % m['data_level'] if m.get('data_level') else ''),
+        # data level: everything the node needs to put the image on the scale the
+        # capture gamma is defined on. Codes: -1 unknown, 0 Video (64-940), 1 Full.
+        'level_required': LEVEL_CODE.get(lv['required'], -1),
+        'level_host': LEVEL_CODE.get(lv['host'], -1),
+        'level_declared': LEVEL_CODE.get(lv['declared'], -1),
+        'level_gain': lv['gain'],
+        'level_offset': lv['offset'],
+        'level_fix': lv['fix'],
+        'level_note': lv['note'],
+        'data_level': m.get('data_level') or '',
         'fps': _join(fps, 'varia: %s' % changes if changes else '') or '—',
         'nd_stab': _join('ND %s' % m['nd_filter'] if m.get('nd_filter') else '',
                          'stabilizzatore %s' % stab if stab else '') or '—',

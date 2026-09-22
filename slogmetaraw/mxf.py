@@ -106,3 +106,75 @@ def find_nrt_xml(f):
                 k = buf.rfind(b'<?xml', 0, i)
                 return buf[k if k >= 0 and i - k < 200 else i:j + len(b'</NonRealTimeMeta>')]
     return None
+
+
+# --- picture essence descriptor: the only place an MXF states its code range ---
+# SMPTE ST 377-1 CDCI/RGBA essence descriptors carry the reference levels as local
+# tags in the header metadata. Sony XAVC MXF writes them, and they are the only
+# declaration of range an MXF has (there is no colr box and no VUI to trust here).
+CDCI_KEY = bytes.fromhex('060e2b34025301010d01010101012800')  # CDCIEssenceDescriptor
+RGBA_KEY = bytes.fromhex('060e2b34025301010d01010101012900')  # RGBAEssenceDescriptor
+# local tag -> key, as registered in the SMPTE dictionary
+PICTURE_TAGS = {
+    0x3301: 'mxf_component_depth',
+    0x3302: 'mxf_horizontal_subsampling',
+    0x3304: 'mxf_black_ref',
+    0x3305: 'mxf_white_ref',
+    0x3306: 'mxf_color_range',
+    0x3308: 'mxf_vertical_subsampling',
+}
+
+
+def _ber(buf, i):
+    """(length, offset after the length) of a BER-encoded length at buf[i]."""
+    b = buf[i]
+    if b & 0x80:
+        n = b & 0x7F
+        if n == 0 or i + 1 + n > len(buf):
+            return None, i + 1
+        return int.from_bytes(buf[i + 1:i + 1 + n], 'big'), i + 1 + n
+    return b, i + 1
+
+
+def _local_set(buf, i, length):
+    """Decode an MXF local set (2-byte tag, 2-byte length, value) into {tag: bytes}."""
+    out = {}
+    end = min(i + length, len(buf))
+    while i + 4 <= end:
+        tag = int.from_bytes(buf[i:i + 2], 'big')
+        size = int.from_bytes(buf[i + 2:i + 4], 'big')
+        i += 4
+        if i + size > end:
+            break
+        out[tag] = buf[i:i + size]
+        i += size
+    return out
+
+
+def find_picture_levels(f, window=WINDOW):
+    """{mxf_black_ref, mxf_white_ref, mxf_color_range, mxf_component_depth, ...}.
+
+    Reads only the head of the file, where the header metadata lives. Returns an
+    empty dict when no picture descriptor is found or it states no reference levels.
+    """
+    buf = f.read_at(0, min(window, f.size))
+    for key in (CDCI_KEY, RGBA_KEY):
+        start = 0
+        while True:
+            i = buf.find(key, start)
+            if i < 0:
+                break
+            length, j = _ber(buf, i + 16)
+            if not length:
+                start = i + 16
+                continue
+            items = _local_set(buf, j, length)
+            out = {}
+            for tag, name in PICTURE_TAGS.items():
+                v = items.get(tag)
+                if v and len(v) <= 8:
+                    out[name] = int.from_bytes(v, 'big')
+            if 'mxf_black_ref' in out and 'mxf_white_ref' in out:
+                return out
+            start = i + 16
+    return {}

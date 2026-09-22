@@ -14,7 +14,7 @@ import os
 import re
 import struct
 
-from . import codec, mp4, mxf, nrt, rtmd
+from . import codec, datalevel, mp4, mxf, nrt, rtmd
 
 SF_DATALESS = 0x40000000  # macOS: only a placeholder on disk, the content lives in cloud storage
 
@@ -53,6 +53,11 @@ def _fmt_fps(x):
     return ('%.3f' % x).rstrip('0').rstrip('.') if x else ''
 
 
+def _tc_rate(x):
+    """Timecode base as the nearest integer (23.976 -> 24, 29.97 -> 30, 59.94 -> 60)."""
+    return int(round(float(x)))
+
+
 def _format_name(container, video_codec, width):
     vc = (video_codec or '').upper()
     intra = 'IP@' in vc or '422IP' in vc or 'INTRA' in vc
@@ -82,6 +87,8 @@ def _color_space(gamma, primaries):
 def _sample_indices(n, fps, interval, max_samples):
     if n <= 0:
         return []
+    if max_samples <= 1:
+        return [n - 1]
     step = max(1, int(round((fps or 25) * interval)))
     idx = list(range(0, n, step))
     if idx[-1] != n - 1:
@@ -193,6 +200,7 @@ def _read_mxf(f, out, interval, max_samples):
             meta.update({'v_' + k: v for k, v in info.items()})
         except (IndexError, ValueError):
             pass
+    meta.update(mxf.find_picture_levels(f))
     ac = meta.get('audio_codec') or ''
     m = re.match(r'LPCM(\d+)', ac)
     if m:
@@ -236,7 +244,7 @@ def _normalise(out):
     """Merge rtmd first-frame values into meta and build display strings."""
     meta = out['meta']
     disp = out['display']
-    tc_fps = int(_fps_value(meta.get('tc_fps')) or round(meta.get('fps') or 25))
+    tc_fps = _tc_rate(_fps_value(meta.get('tc_fps')) or meta.get('fps') or 25)
     frames = meta.get('duration_frames') or meta.get('frames')
     if meta.get('start_tc') and frames:
         # End TC as Resolve/Catalyst show it (exclusive) and duration as timecode
@@ -274,10 +282,41 @@ def _normalise(out):
         meta['gamma_name'] = gamma
     if 'white_balance_k' not in meta:
         out['warnings'].append('Temperatura colore non registrata dalla camera in questo file.')
-    fr = meta.get('v_full_range', meta.get('v_colr_full_range'))
+    # v_full_range is always present but may be None (VUI absent): fall back to
+    # the colr box only then, never when the VUI explicitly said "video range".
+    fr = meta.get('v_full_range')
+    if fr is None:
+        fr = meta.get('v_colr_full_range')
     meta['file_range'] = {True: 'Full', False: 'Video (legal)', None: 'non dichiarato (video)'}.get(fr)
     if out['container'] == 'MXF':
+        # the MXF SPS is located by scanning for a start code inside interleaved
+        # essence, so nothing read from it declares the range; the picture
+        # descriptor does, and datalevel.declared_level uses that instead. Leave
+        # the field empty rather than claim the file said "video".
         meta['file_range'] = None
+    meta['container'] = out['container']
+    _data_level(out)
+
+
+def _data_level(out):
+    """Work out which code-value scale this clip is on, and record it in meta.
+
+    The comparison with what Resolve is doing needs the clip's Data Level
+    attribute, which only exists when Resolve is reachable: callers that have it
+    (resolve_io, plugin_cache) re-run datalevel.decide with the real value.
+    """
+    meta = out['meta']
+    host = meta.get('resolve_data_level') or datalevel.AUTO
+    d = datalevel.decide(meta, host)
+    out['data_level'] = d
+    meta['level_required'] = d['required']
+    meta['level_required_why'] = d['required_why']
+    meta['level_declared'] = d['declared']
+    meta['level_declared_source'] = d['declared_source']
+    meta['level_note'] = d['note']
+    meta['data_level'] = datalevel.summary(meta, host)
+    if d.get('conflict'):
+        out['warnings'].append('Data level: ' + d['conflict'])
 
 
 def _sections(out):
@@ -334,6 +373,13 @@ def _sections(out):
         ('Color space', g('color_space')),
         ('Luminance code range', g('luminance_code_range')),
         ('Range dichiarato nel codec', g('file_range')),
+        ('Data level richiesto dalla gamma', g('level_required_why')),
+        ('Range dichiarato dal file', m.get('level_declared') and '%s (%s)' % (
+            m['level_declared'], m.get('level_declared_source'))),
+        ('Livelli di riferimento MXF', ('nero %s, bianco %s, color range %s, %s bit' % (
+            m.get('mxf_black_ref'), m.get('mxf_white_ref'), m.get('mxf_color_range'),
+            m.get('mxf_component_depth'))) if m.get('mxf_black_ref') is not None else None),
+        ('Interpretazione in Resolve', g('level_note')),
         ('VUI primaries / transfer / matrix', m.get('v_vui_primaries') and '%s / %s / %s' % (
             m['v_vui_primaries'], m.get('v_vui_transfer'), m.get('v_vui_matrix'))),
         ('Bit rate', g('bitrate_mbps', lambda v: '%.0f Mbps' % v)),

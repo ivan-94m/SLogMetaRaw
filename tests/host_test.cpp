@@ -533,8 +533,11 @@ static int createInstance(OfxPlugin* plugin, const char* clipPath, int* failed)
             printf("%s=%s\n", pa->name.c_str(), pa->stringValue.c_str());
         else if (pa->name == "colorTemp" || pa->name == "exposure" || pa->name == "tint")
             printf("%s=%g\n", pa->name.c_str(), pa->doubleValue);
-        else if (pa->name == "metaValid" || pa->name == "settingsVersion")
+        else if (pa->name == "metaValid" || pa->name == "settingsVersion"
+                 || pa->name == "dataLevel" || pa->name == "levelRequired" || pa->name == "levelHost")
             printf("%s=%d\n", pa->name.c_str(), pa->intValue);
+        else if (pa->name == "levelInfo")
+            printf("%s=%s\n", pa->name.c_str(), pa->stringValue.c_str());
     }
 
     plugin->mainEntry(kOfxActionDestroyInstance, handle, NULL, NULL);

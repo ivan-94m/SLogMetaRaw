@@ -10,6 +10,8 @@ import csv
 import io
 import os
 
+from . import datalevel
+
 NOTES_START = '[S-Log MetaRaw]'
 NOTES_END = '[/S-Log MetaRaw]'
 VIDEO_EXTS = ('.mp4', '.mxf')
@@ -26,6 +28,57 @@ RESOLVE_COLOR_SPACES = {
     'S-Cinetone': 'Rec.709 (Scene)',
     'ITU-R BT.709-5': 'Rec.709 (Scene)',
 }
+
+
+# Resolve's per-clip "Data Level" attribute: 'Auto', 'Full' or 'Video'. It is the
+# scale Resolve uses when it decodes the clip into its 32-bit float pipeline, and
+# it is applied before the node graph, so it decides what an OpenFX node receives.
+DATA_LEVEL_PROPERTY = 'Data Level'
+
+
+def read_data_level(clip):
+    """The clip's Data Level as 'Auto' / 'Full' / 'Video', or None if unreadable."""
+    try:
+        v = clip.GetClipProperty(DATA_LEVEL_PROPERTY)
+    except Exception:
+        return None
+    if isinstance(v, dict):
+        v = v.get(DATA_LEVEL_PROPERTY)
+    v = (v or '').strip().lower()
+    return {'auto': datalevel.AUTO, 'full': datalevel.FULL, 'video': datalevel.VIDEO}.get(v)
+
+
+def sync_data_level(clip, r, apply_fix=False):
+    """Read (and optionally correct) this clip's Data Level in Resolve.
+
+    Resolve's "Auto" is documented as a per-codec guess and the resolved value is
+    not exposed by any API, so leaving it on Auto means the node cannot know which
+    scale its input is on. Setting it explicitly is the real fix: it corrects the
+    decode for the whole project — CSTs, RCM and scopes included — not just for
+    the node. It is fully reversible, SetClipProperty accepts 'Auto' again.
+    """
+    meta = r['meta']
+    host = read_data_level(clip)
+    meta['resolve_data_level'] = host or datalevel.AUTO
+    required = meta.get('level_required')
+    report = {'read': host, 'required': required, 'set': None}
+    if apply_fix and required and host is not None and host != required:
+        ok = False
+        try:
+            ok = bool(clip.SetClipProperty(DATA_LEVEL_PROPERTY, required))
+        except Exception:
+            ok = False
+        report['set'] = required if ok else 'FAILED ' + required
+        if ok:
+            meta['resolve_data_level'] = required
+    d = datalevel.decide(meta, meta['resolve_data_level'])
+    r['data_level'] = d
+    meta['level_note'] = d['note']
+    meta['data_level'] = datalevel.summary(meta, meta['resolve_data_level'])
+    if r.get('sections'):   # the details panel must show the final state
+        from .extract import _sections
+        r['sections'] = _sections(r)
+    return report
 
 
 def _fmt_num(v, fmt='%g'):
@@ -90,7 +143,8 @@ def notes_block(r):
     m = r['meta']
     lines = [summary_line(r)]
     extra = []
-    for label, key in (('Data level', 'luminance_code_range'), ('Range codec', 'file_range'),
+    for label, key in (('Data level', 'data_level'), ('Luminance code range', 'luminance_code_range'),
+                       ('Range codec', 'file_range'),
                        ('WB', 'awb_mode'), ('Lighting preset', 'lighting_preset'),
                        ('AE', 'ae_mode'), ('AF', 'af_area'), ('Gain', 'master_gain_db'),
                        ('Stabilizzatore', 'image_stabilizer'), ('LUT', 'monitoring_descriptions'),
@@ -187,15 +241,19 @@ def build_fields(r):
     return {k: v for k, v in fields.items() if v not in (None, '')}
 
 
-def apply_to_clip(clip, r, set_color_space=False, overwrite=True):
+def apply_to_clip(clip, r, set_color_space=False, overwrite=True, add_tags=True,
+                  set_data_level=False):
     """Write metadata to a MediaPoolItem. Returns dict with written/failed keys."""
+    # first, so that the notes, the cache record and the node all see the final state
+    data_level = sync_data_level(clip, r, apply_fix=set_data_level)
     fields = build_fields(r)
     existing = clip.GetMetadata() or {}
     if not overwrite:
         fields = {k: v for k, v in fields.items() if not existing.get(k)}
     fields['Camera Notes'] = merge_notes(existing.get('Camera Notes'), notes_block(r))
-    fields['Keywords'] = merge_keywords(existing.get('Keywords'), keywords(r))
-    report = {'written': [], 'failed': [], 'color_space': None}
+    if add_tags:
+        fields['Keywords'] = merge_keywords(existing.get('Keywords'), keywords(r))
+    report = {'written': [], 'failed': [], 'color_space': None, 'data_level': data_level}
     if clip.SetMetadata(fields):
         report['written'] = list(fields)
     else:  # find the offending keys
@@ -229,6 +287,8 @@ CUSTOM_COLUMNS = (
     ('Sony Focal 35mm', 'focal_length_35mm'), ('Sony Focus Distance', 'focus_distance_m'),
     ('Sony Color Space', 'color_space'), ('Sony Gamma', 'capture_gamma'),
     ('Sony Luminance Code Range', 'luminance_code_range'), ('Sony Codec Range', 'file_range'),
+    ('Sony Data Level', 'data_level'), ('Sony Data Level Required', 'level_required'),
+    ('Sony Data Level Declared', 'level_declared'), ('Resolve Data Level', 'resolve_data_level'),
     ('Sony Stabilizer', 'image_stabilizer'), ('Sony Monitoring LUT', 'monitoring_descriptions'),
     ('Sony Recording Mode', 'recording_mode'), ('Sony Capture FPS', 'capture_fps'),
     ('Sony Recording Time', 'recording_time'), ('Sony Format', 'format_name'),
