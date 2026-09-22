@@ -14,7 +14,7 @@ import unicodedata
 from . import camera, datalevel, resolve_io
 
 CACHE_DIR = os.path.expanduser('~/Library/Application Support/SLogMetaRaw/cache')
-VERSION = 3   # 3 adds the data-level fields (level_*)
+VERSION = 4   # 4 identifies the file too: a reused path can never return stale camera data
 
 
 def fnv1a64(text):
@@ -25,9 +25,31 @@ def fnv1a64(text):
     return '%016x' % h
 
 
+def canonical_path(clip_path):
+    """Return the one path spelling shared with the OpenFX plugin.
+
+    Resolve can expose the same file through a symlink while its scripting API
+    reports the physical path. Hashing those two spellings made the script and
+    node look in different cache files. NFC also handles decomposed macOS paths.
+    """
+    return unicodedata.normalize('NFC', os.path.realpath(os.path.expanduser(clip_path)))
+
+
 def cache_path(clip_path):
-    # macOS paths can arrive NFD or NFC: normalise to NFC so the plugin's FNV matches
-    return os.path.join(CACHE_DIR, fnv1a64(unicodedata.normalize('NFC', clip_path)) + '.json')
+    return os.path.join(CACHE_DIR, fnv1a64(canonical_path(clip_path)) + '.json')
+
+
+def _file_identity(clip_path):
+    """Return cheap fields that let the node reject a stale cache record.
+
+    Size plus nanosecond mtime avoids hashing multi-gigabyte XAVC media. Zeroes
+    preserve useful records made from synthetic inputs used by automated tests.
+    """
+    try:
+        st = os.stat(clip_path)
+    except OSError:
+        return 0, 0
+    return int(st.st_size), int(st.st_mtime_ns)
 
 
 LEVEL_CODE = {datalevel.VIDEO: 0, datalevel.FULL: 1}
@@ -72,9 +94,14 @@ def build_record(r):
     model = m.get('model') or ''
     short = resolve_io._short_model(model)
 
+    canonical = canonical_path(r['path'])
+    file_size, file_mtime_ns = _file_identity(canonical)
     return {
         'version': VERSION,
-        'path': r['path'],
+        'path': canonical,
+        # Kept flat/numeric for the plugin's deliberately tiny JSON reader.
+        'file_size': file_size,
+        'file_mtime_ns': file_mtime_ns,
         'supported': supported,
         'shot_temp': k,
         'shot_tint': tint,

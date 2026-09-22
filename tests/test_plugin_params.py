@@ -129,6 +129,13 @@ class PluginParams(unittest.TestCase):
         self.assertTrue(used, 'tabella kDetails non trovata')
         self.assertEqual(sorted(used - keys), [], 'campi del plugin assenti dal record JSON')
 
+    def test_cache_is_validated_against_the_physical_clip(self):
+        """A path-only cache can silently apply another take after replacement."""
+        self.assertIn('canonicalClipPath', self.src)
+        self.assertIn('cacheMatchesClip', self.src)
+        self.assertIn('file_mtime_ns', self.src)
+        self.assertIn('file_size', self.src)
+
 
 if __name__ == '__main__':
     unittest.main()

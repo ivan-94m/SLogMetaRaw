@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits.h>
 #include <map>
 #include <memory>
 #include <set>
@@ -72,6 +73,33 @@ static std::string homeDir()
 
 static std::string supportDir() { return homeDir() + "/Library/Application Support/SLogMetaRaw"; }
 
+// Resolve does not use one stable spelling for the source path: depending on the
+// page/build it may be a file:// URL, a symlink, or decomposed Unicode. The Python
+// cache writer performs the same operations before hashing.
+static int hexNibble(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static std::string decodeFileUrl(const std::string& input)
+{
+    std::string s = input;
+    if (s.compare(0, 7, "file://") == 0) s.erase(0, 7);
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            int hi = hexNibble(s[i + 1]), lo = hexNibble(s[i + 2]);
+            if (hi >= 0 && lo >= 0) { out += (char)((hi << 4) | lo); i += 2; continue; }
+        }
+        out += s[i];
+    }
+    return out;
+}
+
 static std::string fnv1a64(const std::string& text)
 {
     unsigned long long h = 0xcbf29ce484222325ULL;
@@ -103,6 +131,14 @@ static std::string normalizeNFC(const std::string& s)
     }
     CFRelease(norm);
     return s;
+}
+
+static std::string canonicalClipPath(const std::string& input)
+{
+    std::string path = decodeFileUrl(input);
+    char resolved[PATH_MAX];
+    if (!path.empty() && realpath(path.c_str(), resolved)) path = resolved;
+    return normalizeNFC(path);
 }
 
 static bool readFile(const std::string& path, std::string& out)
@@ -381,9 +417,35 @@ static bool fillClipMeta(const std::string& text, ClipMeta& m)
     return true;
 }
 
+static bool cacheMatchesClip(const ClipMeta& m, const std::string& clipPath)
+{
+    // Pre-v4 records have no fingerprint and are refreshed once. This prevents
+    // footage replaced under the same name from inheriting another take's WB/ISO.
+    const auto version = m.fields.find("version");
+    const auto path = m.fields.find("path");
+    const auto sizeField = m.fields.find("file_size");
+    const auto timeField = m.fields.find("file_mtime_ns");
+    if (version == m.fields.end() || atoi(version->second.c_str()) < 4
+        || path == m.fields.end() || sizeField == m.fields.end() || timeField == m.fields.end()) return false;
+    if (canonicalClipPath(path->second) != clipPath) return false;
+    struct stat st;
+    if (stat(clipPath.c_str(), &st) != 0) return false;
+    const unsigned long long size = strtoull(sizeField->second.c_str(), nullptr, 10);
+#if defined(__APPLE__)
+    const unsigned long long mtimeNs = (unsigned long long)st.st_mtimespec.tv_sec * 1000000000ULL
+                                     + (unsigned long long)st.st_mtimespec.tv_nsec;
+#else
+    const unsigned long long mtimeNs = (unsigned long long)st.st_mtim.tv_sec * 1000000000ULL
+                                     + (unsigned long long)st.st_mtim.tv_nsec;
+#endif
+    const unsigned long long cachedMtime = strtoull(timeField->second.c_str(), nullptr, 10);
+    return size == (unsigned long long)st.st_size && cachedMtime == mtimeNs;
+}
+
 static bool loadMeta(const std::string& clipPath, ClipMeta& m, std::string& status, bool p_Force)
 {
-    const std::string cachePath = supportDir() + "/cache/" + fnv1a64(normalizeNFC(clipPath)) + ".json";
+    const std::string canonicalPath = canonicalClipPath(clipPath);
+    const std::string cachePath = supportDir() + "/cache/" + fnv1a64(canonicalPath) + ".json";
     std::string text;
     if (p_Force) {
         // The button re-reads the file and also writes the metadata into this
@@ -392,8 +454,8 @@ static bool loadMeta(const std::string& clipPath, ClipMeta& m, std::string& stat
         alreadyTried(clipPath, true);
         std::string err;
         std::map<std::string, std::string> result;
-        const bool ran = runResolverWriter(clipPath, err, result);
-        if (!readFile(cachePath, text) || !fillClipMeta(text, m)) {
+        const bool ran = runResolverWriter(canonicalPath, err, result);
+        if (!readFile(cachePath, text) || !fillClipMeta(text, m) || !cacheMatchesClip(m, canonicalPath)) {
             const std::string why = ran && result.count("error") ? result["error"] : err;
             status = "Metadata non disponibili: " + (why.empty() ? std::string("clip non Sony?") : why);
             return false;
@@ -410,24 +472,25 @@ static bool loadMeta(const std::string& clipPath, ClipMeta& m, std::string& stat
         status = "Metadata letti dal file";
         return true;
     }
-    bool fromScript = readFile(cachePath, text);
+    bool fromScript = readFile(cachePath, text) && fillClipMeta(text, m)
+                      && cacheMatchesClip(m, canonicalPath);
     if (!fromScript) {
         std::string why;
-        if (!clipIsReadable(clipPath, why)) {
+        if (!clipIsReadable(canonicalPath, why)) {
             status = "Metadata non letti: " + why;
             return false;
         }
-        if (alreadyTried(clipPath, false)) {
+        if (alreadyTried(canonicalPath, false)) {
             status = "Metadata non disponibili per questa clip: lancia lo script, poi premi Rileggi metadata";
             return false;
         }
         std::string err;
-        if (!runExtractor(clipPath, err) || !readFile(cachePath, text)) {
+        if (!runExtractor(canonicalPath, err) || !readFile(cachePath, text)) {
             status = "Metadata non disponibili: " + (err.empty() ? std::string("clip non Sony?") : err);
             return false;
         }
     }
-    if (!fillClipMeta(text, m)) {
+    if ((!fromScript && !fillClipMeta(text, m)) || !cacheMatchesClip(m, canonicalPath)) {
         status = "Metadata non disponibili: cache non valida";
         return false;
     }

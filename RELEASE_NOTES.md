@@ -1,5 +1,16 @@
 # Changelog
 
+## S-Log MetaRaw 1.1.1
+
+- Corretto l'abbinamento tra clip FX6 e cache del plugin quando Resolve fornisce
+  URL `file://`, percorsi simbolici o Unicode in una forma differente.
+- La cache verifica ora dimensione e data del file: se una clip viene sostituita
+  con lo stesso nome, i metadata precedenti non possono più essere applicati.
+- La versione cliccabile per il controllo aggiornamenti è ora sempre in cima alla
+  finestra; diventa verde quando GitHub offre un installer più recente.
+- Highlights e Shadows usano la nuova curva continua, monotona e pointwise con
+  protezione della cromia, accompagnata dai test contro clipping, contour e aloni.
+
 ## S-Log MetaRaw 1.1.0
 
 Questa versione tocca tutte e due le metà del programma. Lo script ha una finestra

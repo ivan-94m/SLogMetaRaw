@@ -225,6 +225,15 @@ def main(resolve, fusion, bmd, selftest=False):
         # Without the key the native close still closes the window natively;
         # the watchdog timer then notices it and exits the dispatcher loop.
     }, ui.VGroup({'Spacing': 4}, [
+        # Always show the installed version at the top. It doubles as the update
+        # action: after a successful check it turns green and downloads on click.
+        ui.HGroup({'Weight': 0}, [
+            ui.Label({'Text': 'S-Log MetaRaw', 'Weight': 1}),
+            ui.Label({'ID': 'UpdateIcon', 'Weight': 0, 'Text': ''}),
+            ui.Button({'ID': 'Version', 'Text': 'v' + __version__, 'Weight': 0,
+                       'StyleSheet': VERSION_STYLE,
+                       'ToolTip': t('Controllo aggiornamenti: in arrivo')}),
+        ]),
         ui.HGroup({'Weight': 0}, [
             ui.ComboBox({'ID': 'Source', 'Weight': 1, 'MaximumSize': [240, 100],
                          'ToolTip': t('Quali clip leggere')}),
@@ -260,10 +269,6 @@ def main(resolve, fusion, bmd, selftest=False):
         ]),
         ui.HGroup({'Weight': 0}, [
             ui.Label({'ID': 'Status', 'Weight': 1, 'Text': ''}),
-            ui.Label({'ID': 'UpdateIcon', 'Weight': 0, 'Text': ''}),
-            ui.Button({'ID': 'Version', 'Text': 'v' + __version__, 'Weight': 0,
-                       'StyleSheet': VERSION_STYLE,
-                       'ToolTip': t('Controllo aggiornamenti: in arrivo')}),
         ]),
     ]))
     _ui_log('UI START source=%s pid=%s' % (__file__, os.getpid()))
