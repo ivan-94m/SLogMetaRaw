@@ -8,7 +8,7 @@ _ := $(shell ln -sfn "$(SDK)" $(SDKLINK))
 SUPPORT = $(SDKLINK)/Support/Library
 ARCH_FLAGS = -arch arm64 -arch x86_64 -mmacosx-version-min=12.0
 CXXFLAGS = -std=c++17 -O2 -fvisibility=hidden $(ARCH_FLAGS) -I$(SDKLINK)/OpenFX-1.4/include -I$(SDKLINK)/Support/include -I.
-LDFLAGS = -bundle -fvisibility=hidden $(ARCH_FLAGS) -framework Metal -framework Foundation
+LDFLAGS = -bundle -fvisibility=hidden $(ARCH_FLAGS) -framework Metal -framework Foundation -framework CoreFoundation
 SUPPORT_OBJS = ofxsCore.o ofxsImageEffect.o ofxsInteract.o ofxsLog.o ofxsMultiThread.o ofxsParams.o ofxsProperty.o ofxsPropertyValidation.o
 BUNDLE = SLogMetaRaw.ofx.bundle
 
@@ -38,6 +38,7 @@ $(BUNDLE): SLogMetaRaw.ofx Info.plist com.slogmetaraw.SLogMetaRaw.png
 	cp SLogMetaRaw.ofx $(BUNDLE)/Contents/MacOS/
 	cp Info.plist $(BUNDLE)/Contents/
 	cp com.slogmetaraw.SLogMetaRaw.png $(BUNDLE)/Contents/Resources/
+	cp fc_exposure.png fc_temperature.png fc_tint.png $(BUNDLE)/Contents/Resources/
 	codesign --force --sign - $(BUNDLE)
 
 install: $(BUNDLE)

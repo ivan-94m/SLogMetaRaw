@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>S-Log MetaRaw 1.0.1</title>
+    <title>S-Log MetaRaw @VERSION@</title>
     <background file="background.png" alignment="bottomleft" scaling="none"/>
     <background-darkAqua file="background.png" alignment="bottomleft" scaling="none"/>
     <welcome file="welcome.html" mime-type="text/html"/>
@@ -15,5 +15,5 @@
     <choice id="default" title="S-Log MetaRaw">
         <pkg-ref id="com.slogmetaraw.pkg"/>
     </choice>
-    <pkg-ref id="com.slogmetaraw.pkg" version="1.0.1" onConclusion="none">SLogMetaRaw-component.pkg</pkg-ref>
+    <pkg-ref id="com.slogmetaraw.pkg" version="@VERSION@" onConclusion="none">SLogMetaRaw-component.pkg</pkg-ref>
 </installer-gui-script>

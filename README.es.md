@@ -26,7 +26,7 @@ en luz lineal y con ciencia del color publicada.
 | | |
 |---|---|
 | **Script** (Workspace › Scripts) | Lee los metadatos de **todos los clips del proyecto de una vez**, o solo de los seleccionados, y los escribe en el Media Pool: panel Metadata, columnas, palabras clave para las smart bins, data burn-in, exportación CSV. Muestra todo lo que ha leído, agrupado como lo agrupa Catalyst Browse, y corrige campos que Resolve rellena mal en los MXF, como *Camera Aperture* marcando `F53343` en la FX6. |
-| **Plugin** (OpenFX, página Color) | Un clip a la vez, como si tuvieras el panel Raw a mano: Color Temp, Tint, Exposure (EI), White Balance, Color Space/Gamma y tonos. **Se configura solo** con los valores de rodaje de ese clip y, en esos valores, es neutro: mientras no muevas nada, no cambia nada. |
+| **Plugin** (OpenFX, página Color) | Un clip a la vez, como si tuvieras el panel Raw a mano: Color Temp, Tint, Exposure (EI), White Balance, Color Space/Gamma y tonos. **Se configura solo** con los valores de rodaje de ese clip y, en esos valores, es neutro: mientras no muevas nada, no cambia nada. También corrige el **nivel de datos** cuando Resolve lee el clip en la escala equivocada, revela las altas luces con un **hombro fílmico** que nunca recorta y trae tres vistas de **falso color** para situar exposición y balance midiendo en vez de a ojo. |
 
 ---
 
@@ -84,6 +84,11 @@ Dos casillas:
 - **Sovrascrivi i campi già compilati** (sobrescribir los campos ya rellenados), activada por defecto. Es la que corrige
   los valores erróneos que Resolve escribe por su cuenta, como *Camera Aperture* `F53343` en los MXF de la FX6. Si la
   desactivas, solo se rellenan los campos vacíos.
+- **Correggi il Data Level** (corregir el Data Level), **activada por defecto**. Ajusta el atributo *Data Level* de
+  cada clip a Full o Video según la gamma de captura. Es la corrección real: arregla la decodificación para todo el
+  proyecto — CST, RCM, monitores de forma de onda, exportaciones — no solo para el nodo, y es reversible. Las curvas
+  log de Sony se publican sobre code values sin escalar y necesitan *Full*; Rec.709, Cine y HLG necesitan *Video*.
+  En [docs/DATA_LEVELS.md](docs/DATA_LEVELS.md) está toda la investigación, cámara por cámara.
 - **Imposta anche Input Color Space (RCM) dai metadata** (ajustar también el Input Color Space según los metadatos),
   desactivada por defecto. Útil en un proyecto con gestión de color, pero ojo: una vez fijado desde un script, el valor
   ya no puede devolverse a *Project* por script, solo a mano dentro de Resolve.
@@ -104,11 +109,16 @@ partida, no un look. Si copias el nodo a otro clip, se reconfigura con los datos
 | **Color Temp** | 2000–15000 K | el de rodaje | adaptación cromática en luz lineal |
 | **Tint** | −100 … +100 | el de rodaje | verde/magenta, perpendicular al lugar de Planck |
 | **Exposure** | 25–409600 EI (deslizador 50–25600) | el de rodaje | índice de exposición: el doble de EI equivale a +1 paso |
+| **False color: temperatura / tint / esposizione** | activado · desactivado | desactivado | una vista de medición por control, cada una encima del deslizador al que sirve. La de exposición divide en bandas los pasos alrededor del gris 18% al estilo ARRI; las dos de balance leen la distancia al neutro **en kelvin y en unidades de tinte**, así que la banda dice cuánto te falta. Blanco = neutro. Solo una a la vez, y la vista sustituye la imagen: apágala antes de renderizar. [docs/FALSE_COLOR.md](docs/FALSE_COLOR.md) |
 | **Color Space** | Timeline · DaVinci WG · Rec.709 · Rec.2020 · P3 D65 · P3 D60 · P3 DCI · S-Gamut · S-Gamut3 · S-Gamut3.Cine · ACES AP0 · ACES AP1 | Timeline | gamut de salida, como un Color Space Transform. *Timeline* no convierte |
 | **Gamma** | Timeline · DaVinci Intermediate · Linear · Gamma 2.2 · Gamma 2.4 · Gamma 2.6 · Rec.709 · sRGB · SLog · SLog2 · SLog3 · ACEScct | Timeline | curva de salida. *Timeline* no convierte |
-| **Toni** (tonos): Shadows, Highlights, Color Boost, Saturation, Contrast | −1 … +1 | 0 | retoques de tono y color |
+| **Toni › Highlights** | −100 … +100 | 0 | en negativo es un hombro fílmico: pliega las altas luces hacia una asíntota que nunca alcanza, así que nada recorta, y mueve el gris 18% solo 0,003 pasos. Al máximo mete los ~6 pasos que un S-Log3 lleva sobre el gris dentro de los 2,47 que admite un Rec.709 |
+| **Toni › Shadows** | −100 … +100 | 0 | abre o cierra el detalle en sombra alrededor de −4 pasos. Es un multiplicador, así que el negro absoluto sigue siendo negro con cualquier valor |
+| **Toni › Color Recovery** | −100 … +100 | 0 | qué le hace al color la recuperación. A la derecha devuelve color a las altas luces recuperadas — una frente clara conserva su calidez en vez de volverse una mancha rosa plana — y quita croma a las sombras abiertas, donde está el ruido. A la izquierda va hacia la película. [docs/TONE_MAPPING.md](docs/TONE_MAPPING.md) |
+| **Toni:** Color Boost, Saturation, Contrast | −100 … +100 | 0 | retoques de color y contraste |
 | **Avanzate › Ingresso nodo** (entrada del nodo) | Automatico · DaVinci WG/Intermediate · S-Gamut3.Cine/S-Log3 · S-Gamut3/S-Log3 · S-Gamut/S-Log2 · ACES AP1/ACEScct | Automatico | el espacio de color que entra en el nodo. *Automatico* se lo pregunta a Resolve; cámbialo solo si lo que responde es incorrecto |
-| **Avanzate › Rilevato / Stato** (detectado / estado) | — | — | qué se detectó y si se encontraron los metadatos |
+| **Avanzate › Data level in ingresso** (nivel de datos de entrada) | Automatico · Full (0-1023) · Video (64-940) · Nessuna correzione | Automatico | la escala de code values con la que Resolve decodificó el clip. *Automatico* usa el atributo Data Level del clip; mientras siga en *Auto* no corrige nada, porque el valor que Resolve usó realmente no es legible desde ninguna API. Decláralo a mano para un archivo que ningún NLE señala bien, como un ProRes de Atomos de la misma toma — ver [docs/DATA_LEVELS.md](docs/DATA_LEVELS.md) |
+| **Avanzate › Rilevato / Data level / Stato** (detectado / nivel de datos / estado) | — | — | qué se detectó, qué escala se está usando y por qué, y si se encontraron los metadatos |
 | **Dati di ripresa** (datos de rodaje) | — | — | solo lectura: óptica, focal, diafragma, foco, obturador, ISO/EI, balance, color, frame rate, ND/estabilizador, LUT de cámara, archivo |
 
 El nodo guarda sus ajustes por clip: se guardan con la corrección y vuelven cuando regresas a ese clip. Solo se
@@ -272,8 +282,8 @@ packaging/           instalador: paquete, guía PDF, desinstalador
 
 **Ivan Mazzone + Claude** — [github.com/ivan-94m](https://github.com/ivan-94m) · [@ivan_94m](https://instagram.com/ivan_94m).
 
-Escrito junto a **Claude Opus 5** (Anthropic): la versión 1.0 lleva fecha del 19 de septiembre de 2026, y la 1.0.1 del
-día siguiente.
+Escrito junto a **Claude Opus 5** (Anthropic): la versión 1.0 lleva fecha del 19 de septiembre de 2026, la 1.0.1 del
+día siguiente y la 1.1.0 del 22 de septiembre de 2026. El changelog está en [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 Referencias para las etiquetas de Sony: SMPTE RDD 18, [ExifTool](https://exiftool.org) (Sony.pm) y
 [telemetry-parser](https://github.com/AdrianEddy/telemetry-parser) de AdrianEddy (MIT). Parte de la tabla de etiquetas

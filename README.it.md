@@ -27,7 +27,7 @@ stata effettivamente registrata, in luce lineare e con scienza del colore pubbli
 | | |
 |---|---|
 | **Script** (Workspace › Scripts) | Legge i metadata di **tutte le clip del progetto in una volta sola**, o solo di quelle selezionate, e li registra nel Media Pool: pannello Metadata, colonne, keyword per le smart bin, data burn, export CSV. Mostra tutto quello che ha letto, raggruppato come lo raggruppa Catalyst Browse, e corregge i campi che Resolve compila male sugli MXF, come *Camera Aperture* che sull'FX6 diventa `F53343`. |
-| **Plugin** (OpenFX, pagina Color) | Una clip alla volta, come se avessi il pannello Raw sotto mano: Color Temp, Tint, Exposure (EI), White Balance, Color Space/Gamma e toni. **Si imposta da solo** con i valori di ripresa di quella clip, e a quei valori è neutro: finché non muovi qualcosa non cambia niente. |
+| **Plugin** (OpenFX, pagina Color) | Una clip alla volta, come se avessi il pannello Raw sotto mano: Color Temp, Tint, Exposure (EI), White Balance, Color Space/Gamma e toni. **Si imposta da solo** con i valori di ripresa di quella clip, e a quei valori è neutro: finché non muovi qualcosa non cambia niente. Corregge anche il **data level** quando Resolve legge la clip sulla scala sbagliata, sviluppa le alte luci con una **spalla filmica** che non clippa mai, e porta tre viste **false color** per piazzare esposizione e bilanciamento misurando invece che a occhio. |
 
 ---
 
@@ -60,31 +60,52 @@ gestione colore OpenFX 1.5 soprattutto — e lì andrebbe impostato a mano *Avan
 `S-Gamut3.Cine/S-Log3`, `S-Gamut3/S-Log3`, `S-Gamut/S-Log2` e `S-Gamut/S-Log`. Lo script legge i metadata di qualsiasi
 clip Sony XAVC, log o no; il nodo su tutto il resto resta neutro.
 
+### Se lo script non si apre
+
+Apri un progetto e scegli **Workspace › Scripts › S-Log MetaRaw**. Il launcher usa prima la connessione fornita da
+Resolve; se `localhost` non risponde, prova gli indirizzi assegnati allo stesso Mac. Non cerca istanze su altri computer
+e non modifica le preferenze di rete. Gli errori di avvio sono registrati in
+`~/Library/Logs/SLogMetaRaw/launcher.log` e mostrati in un messaggio.
+
+Da questa cartella puoi aggiornare solo lo script con `./install.sh --dev --script-only`. Il lettore usa il Python
+incluso in Resolve 21.1 con un percorso libreria esplicito: questo interprete ignora `PYTHONPATH`.
+
 ---
 
 ## Guida
 
 ### 1 · Lo script
 
-**Workspace › Scripts › S-Log MetaRaw.** La finestra ha tre pulsanti, nell'ordine in cui si usano.
+**Workspace › Scripts › S-Log MetaRaw.** La finestra è essenziale: una riga di pulsanti, una riga di opzioni, e sotto
+le clip lette. Si apre sempre al centro della finestra di DaVinci Resolve (anche a tutto schermo), è ridimensionabile,
+e in basso a destra mostra la versione del programma — cliccabile, per il controllo aggiornamenti in arrivo.
 
-- **Origine** — *Clip selezionate nel Media Pool*, *Bin corrente (con sottocartelle)* o *Tutto il Media Pool*.
-- **1 · Leggi metadata** — legge le clip. Non scrive ancora niente. La tabella si riempie con una riga per clip: Clip,
-  Camera, obiettivo, focale, diaframma, shutter, ISO/EI, WB, color space, data level, e una colonna *Stato* che dice
-  `letto`, oppure `letto · varia: diaframma, fuoco` quando un valore è cambiato durante la ripresa, oppure perché una
-  clip è stata saltata. **Cliccando una riga** il pannello sotto mostra tutto quello che è stato letto, nelle stesse
-  sezioni di Catalyst Browse.
-- **2 · Scrivi in Resolve** — registra i metadata nel Media Pool.
+- **Origine** — *Tutto il Media Pool* (predefinito) o *Clip selezionate nel Media Pool*.
+- **1 · Leggi metadata** — legge le clip, con un indicatore di avanzamento in percentuale: sui progetti grandi vedi
+  sempre a che punto è la lettura. Non scrive ancora niente. La tabella si riempie con una riga per clip: Clip, Camera,
+  obiettivo, focale, diaframma, shutter, ISO/EI, WB, color space, data level, e una colonna *Stato* che dice `letto`,
+  oppure `letto · varia: diaframma, fuoco` quando un valore è cambiato durante la ripresa, o perché una clip è stata
+  saltata. **Cliccando una riga** il pannello sotto mostra tutto quello che è stato letto, nelle stesse sezioni di
+  Catalyst Browse. Al termine, un suono avvisa che la lettura è finita.
+- **2 · Scrivi in Resolve** — registra i metadata nel Media Pool, anche qui con l'avanzamento percentuale e il suono a
+  fine operazione.
 - **Esporta CSV (campi custom)** — scrive un CSV in `~/Documents/SLogMetaRaw` con i valori per cui Resolve non ha un
   campo (sotto c'è l'elenco).
 
-Due caselle:
+Tre spunte:
 
-- **Sovrascrivi i campi già compilati**, attiva di default. È quella che corregge i valori sbagliati che Resolve scrive
-  da solo, tipo *Camera Aperture* `F53343` sugli MXF dell'FX6. Se la togli, vengono riempiti solo i campi vuoti.
-- **Imposta anche Input Color Space (RCM) dai metadata**, disattiva di default. Comoda in un progetto color managed, ma
-  attenzione: una volta impostato via script il valore non si può riportare a *Project* da script — solo a mano, dentro
-  Resolve.
+- **Tag per camera** — disattiva di default. Attivala per aggiungere alle keyword di ogni clip la camera (modello), la
+  gamma e le primarie: utili per le smart bin.
+- **Sovrascrivi i metadata già presenti** — attiva di default. È quella che corregge i valori sbagliati che Resolve
+  scrive da solo, tipo *Camera Aperture* `F53343` sugli MXF dell'FX6. Se la togli, vengono riempiti solo i campi vuoti.
+- **Correggi il Data Level** — **attiva di default**. Imposta l'attributo *Data Level* di ogni clip su Full o Video
+  secondo la gamma di ripresa. È la correzione vera: sistema la decodifica per tutto il progetto — CST, RCM, scope,
+  export — non solo per il nodo, ed è reversibile. Le curve log Sony sono pubblicate su code value non scalati e
+  vogliono *Full*; Rec.709, Cine e HLG vogliono *Video*. In [docs/DATA_LEVELS.md](docs/DATA_LEVELS.md) c'è tutta la
+  ricerca, camera per camera.
+- **Imposta anche Input Color Space (RCM) dai metadata** — disattiva di default. Comoda in un progetto color managed,
+  ma attenzione: una volta impostato via script il valore non si può riportare a *Project* da script — solo a mano,
+  dentro Resolve.
 
 I file originali non vengono mai modificati: lo script li legge e basta.
 
@@ -102,11 +123,16 @@ un look. Se copi il nodo su un'altra clip, si reimposta con i dati di quella cli
 | **Color Temp** | 2000–15000 K | di ripresa | adattamento cromatico in luce lineare |
 | **Tint** | −100 … +100 | di ripresa | verde/magenta, perpendicolare al luogo di Planck |
 | **Exposure** | 25–409600 EI (slider 50–25600) | di ripresa | exposure index: EI doppio = +1 stop |
+| **False color: temperatura / tint / esposizione** | acceso · spento | spento | una vista di misura per controllo, ciascuna sopra lo slider che serve. L'esposizione divide in bande le fermate attorno al grigio 18% alla maniera ARRI; le due viste di bilanciamento leggono la distanza dal neutro **in Kelvin e in unità di tint**, quindi la banda dice di quanto sei fuori. Bianco = neutro. Una sola per volta, e la vista sostituisce l'immagine: spegnila prima di renderizzare. [docs/FALSE_COLOR.md](docs/FALSE_COLOR.md) |
 | **Color Space** | Timeline · DaVinci WG · Rec.709 · Rec.2020 · P3 D65 · P3 D60 · P3 DCI · S-Gamut · S-Gamut3 · S-Gamut3.Cine · ACES AP0 · ACES AP1 | Timeline | gamut in uscita, come un Color Space Transform. *Timeline* non converte |
 | **Gamma** | Timeline · DaVinci Intermediate · Linear · Gamma 2.2 · Gamma 2.4 · Gamma 2.6 · Rec.709 · sRGB · SLog · SLog2 · SLog3 · ACEScct | Timeline | curva in uscita. *Timeline* non converte |
-| **Toni:** Shadows, Highlights, Color Boost, Saturation, Contrast | −1 … +1 | 0 | ritocchi di tono e colore |
+| **Toni › Highlights** | −100 … +100 | 0 | in negativo è una spalla filmica: ripiega le alte luci verso un asintoto che non raggiunge mai, quindi non clippa nulla, e sposta il grigio 18% di 0,003 stop. Al massimo porta i ~6 stop che una S-Log3 ha sopra il grigio dentro i 2,47 che prende un Rec.709. In positivo schiarisce le alte luci |
+| **Toni › Shadows** | −100 … +100 | 0 | apre o chiude il dettaglio in ombra attorno a −4 stop. È un moltiplicatore, quindi il nero assoluto resta nero a qualsiasi valore, e sotto −8 stop il piede non si muove |
+| **Toni › Color Recovery** | −100 … +100 | 0 | cosa fa al colore il recupero. Verso destra restituisce colore alle alte luci recuperate — una fronte chiara tiene il suo calore invece di diventare un piattone rosa — e toglie croma alle ombre aperte, dove sta il rumore. Verso sinistra va verso la pellicola, che avvicinandosi al bianco desatura di più. Non può mai aggiungere colore che il pixel non aveva. [docs/TONE_MAPPING.md](docs/TONE_MAPPING.md) |
+| **Toni:** Color Boost, Saturation, Contrast | −100 … +100 | 0 | ritocchi di colore e contrasto, sulla stessa scala che Resolve usa per Col Boost e Contrast |
 | **Avanzate › Ingresso nodo** | Automatico · DaVinci WG/Intermediate · S-Gamut3.Cine/S-Log3 · S-Gamut3/S-Log3 · S-Gamut/S-Log2 · ACES AP1/ACEScct | Automatico | lo spazio colore che entra nel nodo. *Automatico* lo chiede a Resolve: cambialo solo se quello che risponde è sbagliato |
-| **Avanzate › Rilevato / Stato** | — | — | cosa ha rilevato e se i metadata sono stati trovati |
+| **Avanzate › Data level in ingresso** | Automatico · Full (0-1023) · Video (64-940) · Nessuna correzione | Automatico | la scala di code value su cui Resolve ha decodificato la clip. *Automatico* usa l'attributo Data Level della clip; finché quello è su *Auto* non corregge niente, perché il valore che Resolve ha usato davvero non è leggibile da nessuna API. Dichiaralo a mano per un file che nessun NLE segnala bene, tipo un ProRes Atomos della stessa ripresa — vedi [docs/DATA_LEVELS.md](docs/DATA_LEVELS.md) |
+| **Avanzate › Rilevato / Data level / Stato** | — | — | cosa ha rilevato, quale scala sta usando e perché, e se i metadata sono stati trovati |
 | **Dati di ripresa** | — | — | sola lettura: obiettivo, focale, diaframma, fuoco, shutter, ISO/EI, bilanciamento, colore, frame rate, ND/stabilizzatore, LUT di camera, file |
 
 Il nodo tiene le impostazioni per clip: vengono salvate con la correzione e ritornano quando riapri quella clip. Si
@@ -163,7 +189,28 @@ Nei file Sony XAVC i dati di ripresa sono registrati **fotogramma per fotogramma
 
 In entrambi i casi sono strutture KLV con i set di acquisizione **SMPTE RDD 18**, più i tag proprietari Sony. Accanto ci
 sono l'XML *NonRealTimeMeta* — il sidecar `M01.XML` o una copia incorporata — con modello, matricola, firmware, gamma di
-ripresa e primarie, e l'**SPS** H.264/HEVC, che dà profilo, bit depth e range pieno o limitato.
+ripresa e primarie, e l'**SPS** H.264/HEVC, che dà profilo, bit depth e range pieno o limitato. Sugli MXF legge anche
+il **descrittore immagine CDCI** (livelli di riferimento del nero e del bianco), che è l'unico posto in cui un MXF
+dichiari la propria scala di code value.
+
+### Data level
+
+Sony pubblica le sue curve log su code value **non scalati** — il nero di S-Log3 è il codice 95 su 1023, il grigio 18%
+è 420, il bianco 90% è 598; S-Log2 e S-Log mettono il nero a 90 — mentre Rec.709, le Cine e HLG sono ancorate al range
+legale, 0 IRE = codice 64. Resolve decide su quale scala decodificare una clip dall'attributo *Data Level*, e il suo
+*Auto* è documentato come una deduzione dal codec. Quando sbaglia, ogni valore che entra nella decodifica log è
+sbagliato, e soprattutto nelle ombre: una clip log letta come *Video* chiude i neri, una Rec.709 o Cine letta come
+*Full* li alza e slava l'immagine.
+
+S-Log MetaRaw capisce quale scala serve alla gamma della clip, legge cosa sta facendo davvero Resolve (`Data Level` è
+esposto dall'API di scripting) e chiude il buco da entrambi i lati: lo script imposta l'attributo giusto — e così
+sistema la decodifica per tutto il progetto, non solo per questo nodo — e il nodo corregge quello che resta, rimappando
+i code value nella codifica di camera **prima** della decodifica log, così esposizione e bilanciamento continuano a
+lavorare su luce lineare corretta. Funziona uguale in DaVinci YRGB, in timeline color managed e in ACES: quando al
+nodo arriva DaVinci WG/Intermediate o ACEScct invece della codifica di camera, la rimappatura fa un giro completo
+attraverso trasformazioni esattamente invertibili. In [docs/DATA_LEVELS.md](docs/DATA_LEVELS.md) c'è tutta la ricerca:
+i numeri pubblicati da Sony, una tabella per famiglia di camere, cosa dichiara davvero ogni contenitore e cosa non è
+stato possibile stabilire.
 
 Il parser legge l'indice del file e campiona la traccia di metadata **una volta al secondo, fino a 120 campioni**. È così
 che la colonna *Stato* può dirti che diaframma o fuoco sono cambiati durante la ripresa, ed è il motivo per cui una clip
@@ -232,6 +279,7 @@ altrimenti 5600 K) e il nodo lo segnala come stimato, nella riga di stato e nei 
 ```bash
 make -C ofx/SLogMetaRaw                     # plugin universale arm64 + x86_64 (serve Xcode)
 ./install.sh --dev                          # installa script e plugin puntando a questa cartella
+./install.sh --dev --script-only            # aggiorna solo lo script, senza password amministratore
 python3 -m unittest discover -s tests       # i 25 test
 ./packaging/build_installer.sh              # crea dist/SLogMetaRaw-x.y.z.dmg
 python3 -m slogmetaraw cartella_o_file      # vista stile Catalyst da riga di comando
@@ -268,7 +316,8 @@ packaging/           installer: pacchetto, guida PDF, disinstallatore
 
 **Ivan Mazzone + Claude** — [github.com/ivan-94m](https://github.com/ivan-94m) · [@ivan_94m](https://instagram.com/ivan_94m).
 
-Scritto insieme a **Claude Opus 5** (Anthropic): la versione 1.0 è del 19 settembre 2026, la 1.0.1 del giorno dopo.
+Scritto insieme a **Claude Opus 5** (Anthropic): la versione 1.0 è del 19 settembre 2026, la 1.0.1 del giorno dopo e la
+1.1.0 del 22 settembre 2026. Il changelog è in [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 Riferimenti per i tag Sony: SMPTE RDD 18, [ExifTool](https://exiftool.org) (Sony.pm) e
 [telemetry-parser](https://github.com/AdrianEddy/telemetry-parser) di AdrianEddy (MIT). Parte della tabella dei tag

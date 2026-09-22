@@ -6,7 +6,7 @@ set -euo pipefail
 export COPYFILE_DISABLE=1   # no AppleDouble ._ files in the package
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PKG_DIR="$ROOT/packaging"
-VERSION="$(python3 -c "import sys; sys.path.insert(0, '$ROOT'); import slogmetaraw; print(slogmetaraw.__version__)")"
+VERSION="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import slogmetaraw; print(slogmetaraw.__version__)' "$ROOT")"
 BUILD="$ROOT/build/installer"
 DIST="$ROOT/dist"
 rm -rf "$BUILD" && mkdir -p "$BUILD/root" "$BUILD/resources" "$BUILD/dmg" "$DIST"
@@ -26,7 +26,20 @@ iconutil -c icns "$ICONSET" -o "$ROOT/assets/SLogMetaRaw.icns"
 cp "$ROOT/assets/effect_256.png" "$ROOT/ofx/SLogMetaRaw/com.slogmetaraw.SLogMetaRaw.png"
 make -C "$ROOT/ofx/SLogMetaRaw" >/dev/null
 cp "$ROOT/assets/icon_1024.png" "$PKG_DIR/guide/icon.png"
-CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+# find any Chromium-based browser for headless PDF generation
+CHROME=""
+for app in \
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  "/Applications/Chromium.app/Contents/MacOS/Chromium" \
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge" \
+  "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser" \
+  "$HOME/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"; do
+  if [[ -x "$app" ]]; then CHROME="$app"; break; fi
+done
+if [[ -z "$CHROME" ]]; then
+  echo "ERRORE: nessun browser Chromium trovato per generare le guide PDF (installa Chrome/Chromium/Edge/Brave)." >&2
+  exit 1
+fi
 "$CHROME" --headless=new --disable-gpu --no-pdf-header-footer \
     --print-to-pdf="$BUILD/dmg/Guida S-Log MetaRaw (italiano).pdf" "file://$PKG_DIR/guide/guida.html" 2>/dev/null
 "$CHROME" --headless=new --disable-gpu --no-pdf-header-footer \
@@ -48,17 +61,30 @@ mkdir -p "$R/Library/OFX/Plugins" "$R/Library/Application Support/SLogMetaRaw/li
          "$R/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility"
 cp -R "$ROOT/ofx/SLogMetaRaw/SLogMetaRaw.ofx.bundle" "$R/Library/OFX/Plugins/"
 rsync -a --exclude "__pycache__" "$ROOT/slogmetaraw" "$R/Library/Application Support/SLogMetaRaw/lib/"
-sed "s|__LIB_DIR__|/Library/Application Support/SLogMetaRaw/lib|" "$ROOT/resolve_script/SLogMetaRaw.py" \
-    > "$R/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/S-Log MetaRaw.py"
+python3 "$ROOT/tools/render_launcher.py" "$ROOT/resolve_script/SLogMetaRaw.py" \
+    "/Library/Application Support/SLogMetaRaw/lib" \
+    "$R/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/S-Log MetaRaw.py"
 find "$R" -name ".DS_Store" -delete
 xattr -rc "$R"
 
 echo "4/6 pacchetto"
+# preinstall and postinstall must be executable or the installer stops with
+# "the file does not exist" - which is what execve reports when it cannot run
+# them. A checkout that lost the mode bit would otherwise ship a broken package.
+chmod +x "$PKG_DIR/scripts/preinstall" "$PKG_DIR/scripts/postinstall"
 pkgbuild --root "$R" --install-location / --identifier com.slogmetaraw.pkg --version "$VERSION" \
          --scripts "$PKG_DIR/scripts" "$BUILD/SLogMetaRaw-component.pkg" > "$BUILD/pkgbuild.log" 2>&1
 cp "$PKG_DIR/resources/"* "$BUILD/resources/"
+# the version lives in slogmetaraw/__init__.py alone: substitute it into the
+# installer pages too, so they cannot announce a different one from the disk
+for f in "$BUILD/resources/"*.html; do
+  sed -i '' "s/@VERSION@/$VERSION/g" "$f"
+done
 sips -z 190 190 "$ROOT/assets/icon_1024.png" --out "$BUILD/resources/background.png" >/dev/null
-productbuild --distribution "$PKG_DIR/distribution.xml" --resources "$BUILD/resources" \
+# the version lives in slogmetaraw/__init__.py alone: substitute it in rather than
+# keeping a second copy in distribution.xml that can drift out of step
+sed "s/@VERSION@/$VERSION/g" "$PKG_DIR/distribution.xml" > "$BUILD/distribution.xml"
+productbuild --distribution "$BUILD/distribution.xml" --resources "$BUILD/resources" \
              --package-path "$BUILD" "$BUILD/dmg/Installa S-Log MetaRaw.pkg" > "$BUILD/productbuild.log" 2>&1
 swift "$ROOT/tools/set_icon.swift" "$ROOT/assets/SLogMetaRaw.icns" "$BUILD/dmg/Installa S-Log MetaRaw.pkg"
 

@@ -7,14 +7,18 @@ if [[ -L "$PLUGIN" ]]; then rm -f "$PLUGIN"; fi
 # previous name of this project (SonyMeta), so nothing is left behind after the rename
 rm -rf "/Library/OFX/Plugins/SonyMetaRAW.ofx.bundle" "/Library/Application Support/SonyMeta" \
        "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/SonyMeta.py"
+rm -f "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/SLogMetaRaw.py"
 pkgutil --forget com.sonymeta.pkg >/dev/null 2>&1
 CONSOLE_USER="$(stat -f%Su /dev/console 2>/dev/null)"
 if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" ]]; then
-  HOME_DIR="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | awk '{print $2}')"
+  HOME_DIR="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p')"
   if [[ -n "$HOME_DIR" ]]; then
     SCRIPTS_DIR="$HOME_DIR/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility"
     rm -f "$SCRIPTS_DIR/S-Log MetaRaw.py" "$SCRIPTS_DIR/SLogMetaRaw.py" "$SCRIPTS_DIR/SonyMeta.py"
     rm -f "$HOME_DIR/Library/Application Support/SLogMetaRaw/lib_path"
+    # The OpenFX reader prefers a per-user library over the system library. Remove
+    # that obsolete copy too, so the node and the menu script use the same version.
+    rm -rf "$HOME_DIR/Library/Application Support/SLogMetaRaw/lib/slogmetaraw"
     rm -rf "$HOME_DIR/Library/Application Support/SonyMeta"
   fi
 fi

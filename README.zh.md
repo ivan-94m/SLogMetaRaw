@@ -21,7 +21,7 @@ S-Log MetaRaw 把这些信息读出来并重新派上用场：白平衡、曝光
 | | |
 |---|---|
 | **脚本**（Workspace › Scripts） | **一次性读取项目中全部素材**（或仅选中的素材）的元数据，并写入媒体池：元数据面板、列、用于智能媒体夹的关键词、数据烧录、CSV 导出。它像 Catalyst Browse 那样分组展示读到的全部内容，并修正 Resolve 在 MXF 上填错的字段，例如 FX6 上 *Camera Aperture* 显示为 `F53343`。 |
-| **插件**（OpenFX，Color 页面） | 逐个片段处理，就像手边有 Raw 面板：Color Temp、Tint、Exposure (EI)、White Balance、Color Space/Gamma 以及影调。它会依据该片段的拍摄数值**自动完成设置**，并且在这些数值上是中性的：只要你不动任何控件，画面就不会改变。 |
+| **插件**（OpenFX，Color 页面） | 逐个片段处理，就像手边有 Raw 面板：Color Temp、Tint、Exposure (EI)、White Balance、Color Space/Gamma 以及影调。它会依据该片段的拍摄数值**自动完成设置**，并且在这些数值上是中性的：只要你不动任何控件，画面就不会改变。它还会在 Resolve 用错标度读取片段时修正**数据电平**，用一条永不裁切的**胶片式肩部**显影高光，并提供三种**伪色**视图，让曝光与白平衡靠测量而不是靠眼睛来确定。 |
 
 ---
 
@@ -61,6 +61,7 @@ S-Log MetaRaw 把这些信息读出来并重新派上用场：白平衡、曝光
 两个复选框：
 
 - **Sovrascrivi i campi già compilati**（覆盖已有内容的字段），默认开启。正是它修正了 Resolve 自行写入的错误值，例如 FX6 的 MXF 上 *Camera Aperture* 为 `F53343`。关闭后只填写空白字段。
+- **Correggi il Data Level**（修正数据电平），**默认开启**。根据拍摄伽马将每个片段的 *Data Level* 属性设为 Full 或 Video。这才是真正的修正：它修复的是整个项目的解码 —— CST、RCM、示波器、导出都包括在内，而不只是这个节点 —— 并且可以撤销。索尼的 log 曲线以未缩放的 code value 发布，需要 *Full*；Rec.709、Cine 和 HLG 需要 *Video*。逐机型的完整调研见 [docs/DATA_LEVELS.md](docs/DATA_LEVELS.md)。
 - **Imposta anche Input Color Space (RCM) dai metadata**（同时根据元数据设置输入色彩空间），默认关闭。在色彩管理项目中很实用，但请注意：一旦由脚本设置，就无法再由脚本改回 *Project*，只能在 Resolve 中手动改。
 
 原始文件永远不会被修改：脚本只做读取。
@@ -77,11 +78,16 @@ S-Log MetaRaw 把这些信息读出来并重新派上用场：白平衡、曝光
 | **Color Temp** | 2000–15000 K | 拍摄值 | 在线性光下做色适应 |
 | **Tint** | −100 … +100 | 拍摄值 | 绿/品红，垂直于普朗克轨迹 |
 | **Exposure** | 25–409600 EI（滑块 50–25600） | 拍摄值 | 曝光指数：EI 加倍即 +1 档 |
+| **False color：色温 / 色调 / 曝光** | 开 · 关 | 关 | 每个控件一个测量视图，各自位于所服务滑块的上方。曝光视图按 ARRI 方式以 18% 中灰为中心划分档位；两个白平衡视图**以开尔文和色调单位**读出与中性的距离，因此色带直接告诉你滑块还差多少。白色 = 中性。一次只能开一个，且该视图会替换画面：渲染前请关闭。[docs/FALSE_COLOR.md](docs/FALSE_COLOR.md) |
 | **Color Space** | Timeline · DaVinci WG · Rec.709 · Rec.2020 · P3 D65 · P3 D60 · P3 DCI · S-Gamut · S-Gamut3 · S-Gamut3.Cine · ACES AP0 · ACES AP1 | Timeline | 输出色域，相当于 Color Space Transform。*Timeline* 不做转换 |
 | **Gamma** | Timeline · DaVinci Intermediate · Linear · Gamma 2.2 · Gamma 2.4 · Gamma 2.6 · Rec.709 · sRGB · SLog · SLog2 · SLog3 · ACEScct | Timeline | 输出曲线。*Timeline* 不做转换 |
-| **Toni**（影调）：Shadows、Highlights、Color Boost、Saturation、Contrast | −1 … +1 | 0 | 影调与色彩的微调 |
+| **Toni › Highlights** | −100 … +100 | 0 | 负值是胶片式肩部：把高光折向一个永远达不到的渐近线，因此绝不裁切，而 18% 中灰仅移动 0.003 档。全量时可把 S-Log3 中灰之上约 6 档的信息装进 Rec.709 能容纳的 2.47 档内。正值则提亮高光 |
+| **Toni › Shadows** | −100 … +100 | 0 | 在 −4 档附近打开或压暗暗部细节。它是乘性增益，因此任何设置下绝对黑仍为黑，−8 档以下的趾部原样不动 |
+| **Toni › Color Recovery** | −100 … +100 | 0 | 恢复操作如何影响色彩。向右把色彩还给被恢复的高光——明亮的额头保留暖调，而不会变成一片死板的粉色——并从被提亮的暗部（噪点所在）中去除色度。向左则趋近胶片。[docs/TONE_MAPPING.md](docs/TONE_MAPPING.md) |
+| **Toni:** Color Boost、Saturation、Contrast | −100 … +100 | 0 | 色彩与对比度微调 |
 | **Avanzate › Ingresso nodo**（高级 › 节点输入） | Automatico · DaVinci WG/Intermediate · S-Gamut3.Cine/S-Log3 · S-Gamut3/S-Log3 · S-Gamut/S-Log2 · ACES AP1/ACEScct | Automatico | 进入节点的色彩空间。*Automatico* 向 Resolve 询问；只有当 Resolve 给出的答案不对时才手动更改 |
-| **Avanzate › Rilevato / Stato**（检测结果 / 状态） | — | — | 检测到了什么，以及是否找到了元数据 |
+| **Avanzate › Data level in ingresso**（高级 › 输入数据电平） | Automatico · Full (0-1023) · Video (64-940) · Nessuna correzione | Automatico | Resolve 解码该片段所用的 code value 标度。*Automatico* 读取片段的 Data Level 属性；只要它仍为 *Auto*，就不做任何修正，因为 Resolve 实际采用的值无法通过任何 API 读取。对于没有任何 NLE 能正确标记的文件（例如同一条素材的 Atomos ProRes），请手动声明 — 参见 [docs/DATA_LEVELS.md](docs/DATA_LEVELS.md) |
+| **Avanzate › Rilevato / Data level / Stato**（检测结果 / 数据电平 / 状态） | — | — | 检测到了什么、正在使用哪种标度及其原因，以及是否找到了元数据 |
 | **Dati di ripresa**（拍摄数据） | — | — | 只读：镜头、焦距、光圈、对焦、快门、ISO/EI、白平衡、色彩、帧率、ND/防抖、机内 LUT、文件 |
 
 节点按片段保存设置：它们随调色一起保存，回到该片段时会恢复。只有切换到另一个片段，或按下 *Rileggi metadata*，才会重置。
@@ -202,7 +208,7 @@ packaging/           安装程序：安装包、PDF 指南、卸载脚本
 
 **Ivan Mazzone + Claude** — [github.com/ivan-94m](https://github.com/ivan-94m) · [@ivan_94m](https://instagram.com/ivan_94m)。
 
-与 **Claude Opus 5**（Anthropic）共同编写：1.0 版日期为 2026 年 9 月 19 日，1.0.1 为次日。
+与 **Claude Opus 5**（Anthropic）共同编写：1.0 版日期为 2026 年 9 月 19 日，1.0.1 为次日，1.1.0 为 2026 年 9 月 22 日。更新日志见 [RELEASE_NOTES.md](RELEASE_NOTES.md)。
 
 索尼标签的参考资料：SMPTE RDD 18、[ExifTool](https://exiftool.org)（Sony.pm）以及 AdrianEddy 的
 [telemetry-parser](https://github.com/AdrianEddy/telemetry-parser)（MIT）。标签表的一部分来自后者。
