@@ -1,4 +1,4 @@
-# Spalla, piede e colore: come sono fatti Highlights e Shadows
+# La pressa, il piede e il colore: come sono fatti Highlights e Shadows
 
 Ricerca alla base dello stadio `sm_tone` di `DevelopMath.h`. Le misure vengono dai
 LUT installati su questa macchina; le formule di riferimento dal codice sorgente di
@@ -9,9 +9,11 @@ riuscito a stabilire qualcosa, è scritto in fondo.
 
 ---
 
-## 1 · Cosa c'era prima, misurato
+## 1 · Due operatori, due difetti, entrambi misurati
 
-L'operatore precedente era un **gradino, non una spalla**:
+### 1.1 · Il gradino (fino alla v1.0)
+
+L'operatore originale era un **gradino, non una spalla**:
 
 ```
 ev_out = ev + highlights · 2 · clamp(ev/5, 0, 1)²
@@ -32,14 +34,68 @@ Tre difetti, tutti misurati:
 2. **Salto di pendenza da 0,202 a 1,000 in un punto.** In un cielo i pixel che valgono
    esattamente +5 stop formano una curva di livello, e attorno a una sorgente
    luminosa quelle curve sono concentriche: **un anello**, che si legge come un alone
-   pur essendo l'operatore puntuale. È il difetto che più assomiglia al problema che
-   si voleva risolvere.
+   pur essendo l'operatore puntuale.
 3. **Recupera 0,9 stop.** Porta il clip di un Rec.709 da +2,47 a +3,40 stop sopra il
-   grigio. Una S-Log3 ne porta ~6: se ne buttavano via 3,5.
+   grigio. Una S-Log3 ne porta 7,7: se ne buttavano via quasi sette.
 
-Inoltre il guadagno era applicato uguale a X, Y e Z, quindi la cromaticità era
-conservata **esattamente**: le alte luci recuperate restavano alla saturazione di
-scena (neon) e le ombre alzate si portavano dietro tutto il rumore croma.
+### 1.2 · Rapporti più purezza (v1.1.0): **l'immagine si invertiva**
+
+La v1.1.0 ha sostituito il gradino con una spalla soft-clip corretta, applicata come
+un fattore unico sui tre canali, più un termine di purezza che tirava il pixel verso
+la luminanza:
+
+```
+t      = spalla(norm) / norm
+rgb'   = rgb · t
+purezza = t ^ k(t)                    k(t) = 0,5 · (1 + max(1 − t, 0))
+rgb''  = y + (rgb' − y) · purezza
+```
+
+La spalla, da sola, è monotona e va benissimo. **Il difetto è la coppia.** Quando
+`spalla(norm)` raggiunge il suo asintoto è piatta, mentre `purezza` continua a
+scendere senza limite (`t → 0 ⇒ purezza → 0`). Il canale in uscita vale
+
+```
+out = spalla(norm) · ( y₀ + (b₀ − y₀) · purezza(t) )
+```
+
+e con il primo fattore piatto e il secondo che scende, **il prodotto scende**: un
+pixel cromatico più luminoso esce più scuro. Misurato su una rampa blu satura:
+
+| Highlights | inverte sopra | in stop dal grigio |
+|---|---|---|
+| −10 | norm ≈ 27 | +7,2 st |
+| −20 | norm ≈ 13,6 | +6,2 st |
+| −50 | norm ≈ 6,8 | +5,2 st |
+| −100 | norm ≈ 3,4 | +4,2 st |
+
+Una S-Log3 arriva a **+7,74 stop**, quindi già a Highlights −10 l'ultimo mezzo stop
+registrato si invertiva, e a −50 gli ultimi 2,5 stop. Sui pixel neutri non succedeva
+mai (`norm(x,x,x) = x` e `Y = x`, i due fattori coincidono): il difetto si vedeva solo
+sul colore, da cui la segnalazione «a volte». Sulla griglia di controllo:
+**16.503 passi non monotoni**.
+
+Le due strisce in fondo al grafico qui sopra sono esattamente questo: la stessa rampa
+blu attraverso il vecchio stadio, che culmina a +2 stop e poi **scende** da 0,82 a
+0,34, e attraverso quello nuovo, che sale fino in cima.
+
+**Secondo difetto nello stesso punto.** `y` è la Y XYZ nel gamut del nodo, e in un
+gamut largo il coefficiente del blu è **negativo** — DaVinci WG −0,1478,
+S-Gamut3.Cine −0,1001. Un blu saturo ha `Y < 0`, e il blend verso `y` spingeva i
+canali **sotto lo zero** dentro una zona luminosa.
+
+### 1.3 · La legge dello slider era iperbolica
+
+Con `a = |Highlights|/100` e asintoto `1/a`, il tetto in stop sopra il grigio:
+
+| slider | −1 | −5 | −10 | −20 | −50 | −100 |
+|---|---|---|---|---|---|---|
+| tetto | +9,1 | +6,8 | +5,8 | +4,8 | +3,5 | +2,47 |
+
+I primi dieci punti di corsa spostavano il tetto da +∞ a +5,8 stop; i novanta
+rimanenti valevano 3,3 stop **in tutto**. È il «dopo pochi valori è già estremo».
+L'estremo −100 = +2,47 stop = bianco Rec.709 era già l'intenzione giusta: sbagliata
+era la strada per arrivarci.
 
 ---
 
@@ -133,13 +189,113 @@ Tutto in **lineare di scena**, dopo esposizione e bilanciamento e prima dei trim
 saturazione. Essendo dopo la decodifica log, è agnostico alla curva: S-Log, S-Log2 e
 S-Log3 passano tutti dallo stesso stadio.
 
+### La vasca
+
+La scena è una **vasca di luce lineare**. Il grigio 18% è la sua mediana; il tetto è
+il soffitto della curva che **la camera** ha registrato:
+
+| curva | tetto, in stop sopra il grigio 18% |
+|---|---|
+| S-Log3 | **+7,738** (code 1023 decodifica a 38,4 lineare) |
+| S-Log2 | +6,256 |
+| S-Log | +5,757 |
+| DaVinci Intermediate | +9,118 |
+
+È una proprietà del **formato**, non dell'immagine e non della timeline: lo stesso
+numero su ogni fotogramma di ogni clip girata così. L'esposizione muove l'immagine
+*dentro* la vasca; la vasca non si muove mai.
+
+Perché non un tetto dedotto dal pixel più luminoso della clip, alla maniera di un
+registratore audio 32 bit float: un riflesso speculare in una sola inquadratura
+cambierebbe il significato dello stesso valore di Highlights da shot a shot, e
+sfarfallerebbe in panoramica. Litigherebbe anche con Exposure, che è precisamente il
+controllo che deve muovere l'immagine dentro il contenitore.
+
+Un contenitore che non è una curva di camera — lineare, o una curva di display — non
+ha un soffitto proprio e prende il default di +10 stop.
+
+### La pressa
+
+`Highlights` dice, **linearmente nello slider**, dove atterra il tetto della vasca:
+
 ```
-norm  = power norm(R, G, B)
-t     = spalla(norm) / norm            rapporto di compressione, 1 = intatto
-rgb'  = rgb · t
-purezza p = t ^ k(t)
-rgb'' = y + (rgb' − y) · p
+E_CEIL = E_TOP − |H| · (E_TOP − E_709)          E_709 = log2(1/0,18) = 2,4739
 ```
+
+A −100 il tetto atterra **esatto** su +2,4739 stop, cioè 1,0 lineare, il picco che un
+segnale Rec.709 contiene. In positivo lo specchio: il punto di scena che sta a
+`E_CEIL` viene portato **su** al tetto, fino a 2 stop di stiramento.
+
+La curva è la stessa primitiva soft-clip di prima, ma **riparametrizzata dal tetto**
+invece che da `a`, in forma chiusa:
+
+```
+f(x) = x · (1 + (x/K)^n)^(−1/n)
+K    = X_TOP / ((X_TOP / X_CEIL)^n − 1)^(1/n)           X = 0,18 · 2^E
+```
+
+`H = 0` dà `K = 0`, che tutti i chiamanti leggono come identità: il nodo è **esatto**
+a zero, senza un ramo speciale. Proprietà che restano: `f(0) = 0` e `f'(0) = 1`
+esatti, C^∞ per x > 0, asintoto mai raggiunto — nessun valore di scena clippa.
+
+Scritta come `(x^−n + K^−n)^(−1/n)`: la stessa curva, ma un x enorme va semplicemente
+in underflow a 0 e il risultato atterra esattamente su K. Scritta nell'altro modo,
+`(x/K)^n` va in overflow in float32 e il divisore infinito farebbe uscire **nero** il
+pixel più luminoso del fotogramma.
+
+### L'esponente del ginocchio
+
+`n` è l'unico numero che decide quanto in basso arriva la pressa: lo spostamento che
+applica va come `2^(n·(e − tetto))` in stop, quindi più `n` è piccolo più la
+compressione si distribuisce sulla scala alta invece di ammucchiarsi contro il tetto.
+Misurato a Highlights −100 su contenitore S-Log3:
+
+| n | grigio 18% | incarnato +1 | separazione +3..tetto |
+|---|---|---|---|
+| 2,0 | 0,023 st | 0,088 st | 0,284 st |
+| **2,5** | **0,008 st** | **0,043 st** | **0,195 st** |
+| 3,0 | 0,003 st | 0,022 st | 0,139 st |
+
+`n = 3` era il valore della v1.1.0 e ammucchia tutto quello che sta sopra +3 stop in
+una banda di 0,139 stop: le alte luci vanno piatte, che è l'opposto di quello che
+serve. `n = 2,5` dà il 40% di separazione in più per uno spostamento dei mezzitoni di
+0,008 stop — lo 0,55% di un valore, un ordine di grandezza sotto qualsiasi soglia
+visibile su un campo uniforme. `n = 2` comprerebbe altri 0,09 stop di separazione per
+il triplo dello spostamento dei mezzitoni: il lato sbagliato del compromesso per un
+controllo che la gente lascia acceso.
+
+Progressione risultante, a Highlights −100:
+
+| stop scena | pendenza | |
+|---|---|---|
+| −4 … −2 | 1,000 | intatto, perfettamente lineare |
+| 0 (grigio 18%) | 0,986 | |
+| +1 (incarnato) | 0,928 | |
+| +2 (bianco 90%) | 0,695 | comincia a comprimere |
+| +3 | 0,287 | |
+| +4 → +7,74 | 0,066 → 0,000 | asintotico |
+
+### L'espansione
+
+Il ramo positivo **non** è l'inverso esatto. `f⁻¹(y) = y·(1 − (y/K)^n)^(−1/n)` diverge
+quando `y` si avvicina a `K`, e `K` sta **sotto** il tetto della vasca: tutta la parte
+alta del fotogramma andrebbe a sbattere contro un muro e uscirebbe come un unico
+valore piatto. Misurato prima del tetto di guadagno: a Highlights +50 il code S-Log3
+0,80 usciva a 1,145, con tutto quello sopra sullo stesso numero.
+
+È invece lo **spostamento speculare**: stessa legge di decadimento, segno opposto,
+limitato.
+
+```
+x · 2^softmin(drop, cap)          drop = log2(x / f(x)),  cap = |H| · 2 stop
+```
+
+Il minimo è morbido, `(drop^−m + cap^−m)^(−1/m)` con m = 4, e non per eleganza: un
+`min` duro sarebbe solo C⁰ nel guadagno, i pixel esattamente allo spigolo
+formerebbero una curva di livello, e attorno a una sorgente luminosa quelle curve
+sono concentriche — un anello, precisamente l'artefatto che questo stadio esiste per
+evitare. Misurato prima: **salto di pendenza di 0,589** a Highlights +100. Dopo:
+0,0060, che è il rumore della griglia di differenze finite.
 
 ### La norma
 
@@ -158,37 +314,15 @@ Perché non le alternative:
 | max(RGB) | 0,300 | **cambia canale** dove uno clippa e un altro no. Una funzione puntuale di una quantità spazialmente discontinua produce frange — il manuale di darktable lo dice: *"may produce halos or fringes where channels are clipped"* |
 | power norm | 0,268 | prende i saturi come max, senza discontinuità |
 
-OpenDRT usa una scelta diversa e più elaborata (norma euclidea su RGB desaturato del
-35% verso pesi sbilanciati sul blu), ma la conclusione è la stessa: **né luminanza né
-max(RGB)**.
-
-### La spalla
-
-```
-spalla(L) = L / (1 + (L·a)^n)^(1/n)        a = |Highlights|, n = 3
-```
-
-È la stessa primitiva che darktable usa in AgX (`_sigmoid(x, power)`). Proprietà:
-
-- `f(0) = 0` e `f'(0) = 1` **esattamente**;
-- tende all'asintoto `1/a` senza **mai** raggiungerlo: nessun valore di scena, per
-  quanto alto, clippa;
-- **C^∞ per x > 0**, e alla giunzione con un tratto lineare la continuità dipende da n:
-  n=1 darebbe solo C¹, n<1 addirittura derivata seconda infinita, **n=3 dà C⁴**.
-  Niente giunzione, niente curvatura che salta, niente anello concentrico;
-- `a = 0` dà l'identità esatta senza bisogno di un ramo: il nodo resta neutro a zero.
-
-Con `a = 1` ripiega +6 stop dentro +2,47, cioè dentro il bianco di un Rec.709,
-spostando il grigio 18% di **0,003 stop** e un incarnato a +1 stop di 0,053.
-
 ### Il piede
 
 ```
-guadagno(ev) = 2^( Shadows · 1,5 · exp(−((ev + 4)/1,8)²) )
+guadagno(ev) = 2^( Shadows · 1,5 · exp(−((ev − (E_BOT + 6))/1,8)²) )
 ```
 
-Una campana liscia in log2, centrata a −4 stop dove vive il dettaglio in ombra, che
-muore a entrambe le estremità:
+Una campana liscia in log2, centrata **sei stop sopra il fondo della vasca** (cioè
+−4 stop dal grigio) dove vive il dettaglio in ombra, che muore a entrambe le
+estremità:
 
 | a | campana | guadagno |
 |---|---|---|
@@ -205,38 +339,64 @@ L'ampiezza è vincolata: sopra 2,10 stop la curva si ripiegherebbe e le ombre
 
 ### Il colore
 
-Scalare tutti e tre i canali per lo stesso fattore **non cambia la saturazione**. Il
-commento nel sorgente di darktable lo dice bene: una curva che conserva i rapporti è
-*saturation-invariant*, quindi un'alta luce compressa mantiene tutto il suo colore e
-viene fuori come una macchia uniforme e piena senza gradazione interna. Una curva che
-conserva i rapporti **non brucia mai verso il bianco da sola**: la purezza va ridotta
-esplicitamente.
+Scalare tutti e tre i canali per lo stesso fattore **non cambia la saturazione**: una
+curva che conserva i rapporti è *saturation-invariant*, quindi un'alta luce compressa
+mantiene tutto il suo colore e viene fuori come una macchia uniforme e piena senza
+gradazione interna — il piattone rosa. Una curva che conserva i rapporti **non brucia
+mai verso il bianco da sola**.
+
+La v1.1.0 risolveva questo con un esponente di purezza, ed è quello che invertiva.
+Adesso è una **miscela convessa a peso costante** fra i due modi di applicare la
+stessa curva:
 
 ```
-k(t) = 0,5 · (1 + 1,0 · max(1 − t, 0)) · 2^(−ColorRecovery)
-p    = t^k(t)          se t < 1, altrimenti 1
+rgb_rapporti = rgb · f(norm)/norm       conserva i rapporti, tiene tutto il colore
+rgb_canale   = f(R), f(G), f(B)         i tre canali sullo stesso soffitto
+out          = w · rgb_rapporti + (1 − w) · rgb_canale
 ```
 
-L'esponente **cresce dove la curva ha compresso di più** — è il meccanismo del
-*Purity Limit* di OpenDRT, dove `p = 1 + 4·(1 − tonescale)·(...)`. Serve perché una
-legge di potenza singola può centrare l'incarnato o l'estremo alto, non entrambi:
+Il ramo per-canale **è** la desaturazione della pellicola, non un termine aggiunto: i
+tre canali asintotano allo stesso soffitto, salendo convergono, e convergere *è*
+desaturare. È lo stesso risultato che §3 misura sul 2383. Il suo difetto da solo — che
+lega la perdita di croma alla distanza fra i canali, e quindi schiaccia gli incarnati
+mentre sovrasatura i mezzitoni — è esattamente quello che il ramo dei rapporti
+compensa.
 
-| | incarnato +3 | cielo +6 |
+`Color Recovery` muove `w`: a destra tiene il colore, a sinistra va verso la
+pellicola. **Perché questo non può invertire**: entrambi i rami sono monotoni in ogni
+canale, e `w` non dipende dal pixel, quindi la combinazione convessa è monotona. Non
+è una taratura, è una proprietà strutturale.
+
+Verificato: **0 passi non monotoni su 5.996.250 confronti** — 21 valori di Highlights
+× 5 di Shadows × 5 di Color Recovery × 15 cromaticità (primarie con un canale
+esattamente a zero incluse) × 131 livelli × 3 canali.
+
+Sul cielo a +4 stop, Highlights −100:
+
+| Color Recovery | RGB | saturazione |
 |---|---|---|
-| esponente fisso 0,8 | 0,297 ✓ | 0,285 (troppo colorato) |
-| **esponente crescente** | **0,305 ✓** | **0,115** |
-| pellicola | 0,154 | 0,056 |
+| −100 (pellicola) | 0,710 / 0,846 / 0,945 | 0,249 |
+| 0 | 0,546 / 0,723 / 1,018 | 0,464 |
+| +100 (scena) | 0,382 / 0,600 / 1,091 | 0,650 |
 
-Il bersaglio concordato era ~0,30 sull'incarnato: più ricco della pellicola, che a
-0,154 dà proprio il piattone. Il cursore **Color Recovery** muove l'esponente: verso
-destra restituisce colore, verso sinistra va verso la pellicola.
+### Quello che è stato tolto
 
-Il cursore non può mai **aggiungere** croma che il pixel non aveva: `p ≤ 1` sempre.
-È la stessa regola di darktable v7 (*"resaturation is allowed only where filmic
-desaturated"*).
+`Color Recovery` verso destra **non toglie più croma alle ombre aperte**. Non è una
+dimenticanza. Lungo un raggio il risultato è `t·n₀·[1 + (r−1)·s(t)]` con `r` il
+rapporto cromatico costante del canale, e la monotonia richiede
 
-Verso destra toglie anche croma alle ombre aperte, proporzionalmente a quanto sono
-state alzate — dove sta il rumore cromatico.
+```
+1 + (w'/w)/ln2 + shadows · AMP · bell' > 0
+```
+
+per qualunque forma del peso `w`. Il solo guadagno delle ombre spende già quel budget
+fino a 0,285 a Shadows +100, e **qualsiasi peso che decade a zero ha `−w'/w`
+illimitato**: un canale che vale zero — una primaria satura uscita da un gamut largo —
+inverte sempre da qualche parte. Misurato: 48.497 passi non monotoni con un peso
+gaussiano, 67.912 con una logistica.
+
+Il rumore cromatico nelle ombre è un problema di riduzione rumore. Non appartiene
+contrabbandato dentro una curva di tono che deve promettere di non invertire.
 
 ---
 
@@ -244,14 +404,17 @@ state alzate — dove sta il rumore cromatico.
 
 | | questo nodo | OpenDRT | ACES 2.0 | AgX |
 |---|---|---|---|---|
-| primitiva spalla | soft-clip n=3 | `(x/(x+s))^p` | Michaelis-Menten × toe quadratico | soft-clip, stessa famiglia |
+| primitiva spalla | soft-clip n=2,5, parametrizzata dal tetto | `(x/(x+s))^p` | Michaelis-Menten × toe quadratico | soft-clip, stessa famiglia |
 | `f(0) = 0` | **sì, esatto** | **no**, `tn_off = 0.005` alza il nero a ~5/255 | sì | sì (clamp) |
 | norma | power norm | euclidea su RGB desaturato | JMh (M) | per canale |
-| purezza | `t^k(t)`, k cresce | `1 − t^p`, p cresce | compressione di M in JMh | conseguenza del per-canale |
-| protezione incarnato | esponente crescente | finestra di tinta sull'arancio (`pt_lmh_r`) | nessuna — è nota per gli incarnati *"pasty pastel"* | nessuna |
+| purezza | miscela rapporti / per-canale, peso costante | `1 − t^p`, p cresce | compressione di M in JMh | conseguenza del per-canale |
+| monotonia per canale | **garantita per costruzione** | non dichiarata | non dichiarata | sì (per-canale puro) |
+| protezione incarnato | il ramo dei rapporti nella miscela | finestra di tinta sull'arancio (`pt_lmh_r`) | nessuna — è nota per gli incarnati *"pasty pastel"* | nessuna |
 
-Due cose che questo nodo fa **meglio** dei riferimenti: il nero è ancorato
-esattamente (OpenDRT di default no), e la spalla è C⁴ alla giunzione.
+Tre cose che questo nodo fa **meglio** dei riferimenti: il nero è ancorato
+esattamente (OpenDRT di default no), non c'è nessuna giunzione da rendere continua
+perché la curva è una sola espressione, e la monotonia per canale è una proprietà
+dimostrata e verificata su sei milioni di confronti invece che una speranza.
 
 Una che fa **peggio**: la protezione degli incarnati di OpenDRT è una finestra
 gaussiana di tinta centrata sull'arancio, più selettiva di un esponente che dipende
@@ -259,15 +422,19 @@ solo dalla compressione. Qui non è implementata — richiederebbe un `atan2` pe
 e una tabella di tinta — e il bersaglio di 0,30 è raggiunto lo stesso, ma su un
 soggetto arancione molto saturo il comportamento sarà meno raffinato.
 
-### Un compromesso dichiarato
+### I compromessi dichiarati
 
-Sopra +3 stop questa spalla comprime **più** di entrambi i riferimenti: fra +3 e +6
-stop tiene 0,14 stop di separazione contro i 0,26 del Kodak. È il prezzo di un
-ginocchio abbastanza netto da non toccare i mezzitoni (n=3 sposta il grigio di 0,003
-stop; n=2 lo sposterebbe di 0,023 e l'incarnato di 0,154). La priorità era esplicita:
-non incidere sui mezzitoni. Il test
-`test_above_three_stops_it_compresses_harder_than_film` registra il compromesso
-perché non venga scambiato per un difetto.
+**Sopra +3 stop, a Highlights −100**, questa pressa comprime più dei riferimenti: fra
++3 stop e il tetto del contenitore tiene 0,195 stop di separazione. È il prezzo di
+far stare 7,7 stop dentro i 2,47 che il Rec.709 contiene, ed è la ragione per cui la
+corsa dello slider è lineare: a −50 la stessa scena resta molto più aperta. Il test
+`test_it_keeps_detail_between_three_stops_and_the_top` registra il numero perché non
+venga scambiato per un difetto.
+
+**L'espansione arriva a 2 stop**, non alla stessa corsa della compressione. Un
+recupero di 7,5 stop verso l'alto porterebbe il tetto della vasca fuori dal
+contenitore e tutto quello che ci stava sopra clipperebbe; per spostamenti di quella
+misura lo strumento giusto è Exposure, che muove l'immagine dentro la vasca.
 
 ---
 
@@ -286,14 +453,20 @@ perché non venga scambiato per un difetto.
 4. **Il razionale scritto di Jed Smith sulla scelta della norma.** Ho il codice e la
    documentazione dei parametri, non un passaggio in cui spiega perché l'euclidea su
    RGB desaturato batta una norma di luminanza.
+4-bis. **Il valore giusto del tetto della vasca per una camera diversa da una Sony.**
+   Qui è dedotto dalla curva registrata, che per le S-Log è esatto e verificabile.
+   Per un contenitore che non è una curva di camera il default di +10 stop è una
+   scelta ragionata, non una misura.
 5. **Una fonte pubblicata che dica "una giunzione solo C¹ produce contouring visibile
    in una DRT".** Non sembra esistere. La letteratura sulle bande di Mach copre il caso
    della derivata prima; il caso della derivata seconda per le curve di tono no.
 6. **Una curva pubblicata per la desaturazione delle ombre.** La tecnica è reale
    (c'è letteratura brevettuale sul decadimento della crominanza per il rumore) ma
    **le DRT moderne fanno l'opposto**: ACES 2.0 e OpenDRT *aumentano* deliberatamente
-   la croma nelle ombre per non avere mezzitoni slavati. Qui è su un cursore che parte
-   da zero, quindi è una scelta esplicita di chi corregge, non un default.
+   la croma nelle ombre per non avere mezzitoni slavati. Qui è stata **tolta**, perché
+   incompatibile con la garanzia di monotonia: il conto è in §4, *Quello che è stato
+   tolto*. Non ho trovato nessuna pubblicazione che affronti quel conflitto, il che
+   non vuol dire che non esista.
 
 ---
 

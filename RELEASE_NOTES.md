@@ -1,5 +1,179 @@
 # Changelog
 
+## S-Log MetaRaw 1.1.1
+
+Versione di correzione. Due difetti segnalati sul campo, entrambi riprodotti e
+misurati prima di toccare una riga: **le alte luci si invertivano** e **una clip FX6
+usciva verde e incorreggibile**. Nel verificarli ne sono usciti altri cinque, elencati
+in fondo.
+
+**Aggiornamento:** installa sopra la versione precedente. Non serve cancellare la
+cache OFX: il set di parametri non cambia. I nodi già presenti nei progetti
+mantengono i loro valori — ma *Highlights* ora vuol dire un'altra cosa, vedi in
+fondo.
+
+---
+
+### Le alte luci si invertivano
+
+Lo stadio di tono della 1.1.0 scalava i tre canali per `f(norm)/norm` e poi li tirava
+verso la luminanza con una purezza `t^k(t)`. La spalla, da sola, era corretta. Il
+difetto era la **coppia**: quando la spalla raggiunge il suo asintoto è piatta, mentre
+la purezza continua a scendere senza limite. Con il primo fattore fermo e il secondo
+che cala, il prodotto **cala**: un pixel cromatico più luminoso usciva più scuro.
+
+| Highlights | si invertiva sopra |
+|---|---|
+| −10 | +7,2 stop dal grigio |
+| −20 | +6,2 stop |
+| −50 | +5,2 stop |
+| −100 | +4,2 stop |
+
+Una S-Log3 arriva a +7,74 stop, quindi già a −10 l'ultimo mezzo stop registrato si
+invertiva. Sui grigi non succedeva mai, perché lì i due fattori coincidono: si vedeva
+solo sul colore — la cima di un cielo, un neon, una lampada — da cui la segnalazione
+«a volte». Sulla griglia di controllo: **16.503 passi non monotoni**.
+
+C'era un secondo difetto nello stesso punto. La luminanza verso cui il pixel veniva
+tirato è la Y XYZ del gamut del nodo, e in un gamut largo il coefficiente del blu è
+**negativo** (DaVinci WG −0,1478, S-Gamut3.Cine −0,1001). Un blu saturo ha Y minore di
+zero, e il blend lo spingeva **sotto il nero** dentro una zona luminosa.
+
+### Highlights adesso: una pressa ancorata al contenitore registrato
+
+La scena è una **vasca di luce lineare**. Il grigio 18% è la mediana; il tetto è il
+soffitto della curva che **la camera** ha registrato — S-Log3 +7,74 stop sopra il
+grigio, S-Log2 +6,26, S-Log +5,76. È una proprietà del formato: lo stesso numero su
+ogni fotogramma di ogni clip girata così, qualunque cosa faccia la timeline.
+L'esposizione muove l'immagine *dentro* la vasca; la vasca non si muove mai.
+
+`Highlights` dice, **linearmente nel cursore**, dove atterra quel tetto:
+
+- **a −100** il tetto atterra esatto su 1,0 lineare, il picco che un segnale Rec.709
+  contiene;
+- **in positivo** fa lo specchio e stira la cima della scala fino a 2 stop, per
+  riportare al picco un'alta luce che satura prima.
+
+La vecchia legge metteva l'asintoto a `1/|Highlights|`, un'iperbole: i primi dieci
+punti di corsa spostavano il tetto da infinito a +5,8 stop, e i novanta rimanenti
+valevano 3,3 stop **in tutto**. Da qui «dopo pochi valori è già estremo».
+
+Progressione misurata a −100 su contenitore S-Log3:
+
+| stop di scena | pendenza | |
+|---|---|---|
+| −4 … −2 | 1,000 | intatto, perfettamente lineare |
+| 0 (grigio 18%) | 0,986 | il grigio si sposta di 0,008 stop |
+| +1 (incarnato) | 0,928 | |
+| +2 (bianco 90%) | 0,695 | comincia a comprimere |
+| +3 | 0,287 | |
+| +4 → +7,74 | 0,066 → 0,000 | asintotico, non clippa mai |
+
+### Color Recovery: adesso è una miscela, e non può rompere il rolloff
+
+Non è più un esponente che scappa. È il **peso fra due modi di applicare la stessa
+curva**: un fattore unico sui tre canali, che conserva tutto il colore di scena, e la
+curva per canale, dove i tre condividono un soffitto e salendo convergono — perché
+convergere *è* desaturare, ed è così che lo fa la pellicola.
+
+Verso destra tiene il colore, verso sinistra va verso la pellicola. È la leva organica
+sul cielo: a −100 di Highlights, un cielo a +4 stop passa da saturazione 0,249
+(pellicola) a 0,650 (scena) muovendo solo questo cursore.
+
+**Perché non può invertire**: entrambi i rami sono monotoni in ogni canale e il peso
+non dipende dal pixel, quindi la miscela è monotona. Non è una taratura, è una
+proprietà strutturale. Verificato: **0 passi non monotoni su 5.996.250 confronti**.
+
+### La clip FX6 usciva verde
+
+Sony scrive la correzione di tinta nel tag RTMD `0x811F` in **centesimi**: la clip
+`FX6_0024.MXF` legge **15,17** in Catalyst Browse e nel pannello Camera Raw di
+Resolve, e nel file porta **1517**. Quel numero finiva tale e quale in un modello la
+cui unità è `Duv × 3000`, che metteva il bianco di ripresa a Duv 0,506 — fuori dal
+luogo spettrale — e i rapporti di von Kries uscivano **negativi**: R −0,95, G +1,17,
+B −1,73. Un'immagine con il solo canale verde.
+
+Due cose lo rendevano *incorreggibile* invece che semplicemente sbagliato:
+
+- il cursore Tint arriva a 100 e non poteva raggiungere 1517 per annullarlo. Restava
+  incollato a 100 mentre il valore di ripresa restava 1517, e portarlo a 0 cambiava
+  quasi nulla perché il lato ripresa dominava quindici a uno;
+- **a controlli fermi l'immagine sembrava giusta**, perché decodifica e codifica sono
+  inverse esatte: con bianco scelto uguale a bianco di ripresa i rapporti valgono 1 e
+  l'errore si cancella. Quindi *As shot* mostrava bene e qualsiasi altra cosa no.
+
+Corretto a ogni livello:
+
+- **il lettore riporta il numero che mostra la camera** (15,17, come Catalyst e come
+  Resolve), non l'intero grezzo;
+- **il record è controllato su entrambi i lati**, nello script e nel nodo: Kelvin
+  dentro il luogo di Planck, tint dentro la corsa del cursore, EI positivo. Se un
+  valore è stato limitato il campo *Stato* lo dice, invece di gradare in silenzio da
+  un numero che nessuno ha scelto;
+- **il punto di bianco è protetto**: nessun valore che un file può portare produce più
+  un colore che i coni non rappresentano;
+- **«As shot» legge i valori di ripresa direttamente.** Prima si fidava di un
+  assegnamento ai cursori avvenuto una volta sola, quando il nodo si legava alla clip.
+  Se i metadata arrivavano dopo — un MXF il cui primo parse supera il watchdog di 8 s,
+  una cache scritta dallo script più tardi — i valori nascosti si aggiornavano e i
+  cursori visibili no. Il menù diceva *As shot* e il nodo sviluppava da un riferimento
+  che nessuno aveva scelto. Ora quella deriva è impossibile.
+
+E una conseguenza pratica: un cursore ancora fermo sul **vecchio** valore di ripresa è
+un cursore che il colorist non ha toccato, quindi segue la correzione; uno che è stato
+mosso è una decisione di grading e resta esattamente dov'è.
+
+### Altri cinque difetti, trovati verificando i primi due
+
+- **Temp 3200 con Tint +100** — entrambi raggiungibili dai cursori — davano un bianco
+  la cui risposta del cono S vale −0,009 e un rapporto di −152. Ora il tint satura
+  invece di rompersi, e satura solo dove stava chiedendo un illuminante che non
+  esiste.
+- **A 25000 K si divideva per zero**: i due campioni del luogo di Planck finivano
+  clampati sullo stesso punto e la tangente aveva lunghezza nulla.
+- **Contrast** leggeva la luminanza XYZ, negativa per un blu saturo in gamut largo.
+  Il `max(Y, 1e-6)` la leggeva come −17,4 stop, e un contrasto negativo la
+  trasformava in un guadagno di circa 100.000 su quel pixel. Ora usa la stessa power
+  norm dello stadio di tono.
+- **Uno spazio colore d'ingresso non riconosciuto** veniva assunto in silenzio. È il
+  tipo di errore invisibile finché non tocchi qualcosa, perché a controlli fermi si
+  cancella: ora lo dice in *Rilevato* e in *Stato*.
+- **Gli script di installazione non erano eseguibili in git.** `pkgbuild` li avrebbe
+  impacchettati senza il bit di esecuzione.
+
+### Cosa cambia nei progetti esistenti
+
+`Highlights` **vuol dire un'altra cosa**. Prima il numero fissava l'asintoto a
+`1/|H|` in lineare, adesso dice linearmente dove atterra il tetto del contenitore
+registrato. Un nodo salvato con la 1.1.0 apre con lo stesso numero e **grada in modo
+diverso**, quasi sempre molto meno violento. È dichiarato nella versione delle
+impostazioni (4 → 5), e il valore viene conservato, non azzerato: quello che il
+colorist aveva chiesto resta visibile invece di essere buttato via.
+
+`Color Recovery` **non toglie più croma alle ombre aperte**. Non è una dimenticanza:
+il conto è in [docs/TONE_MAPPING.md](docs/TONE_MAPPING.md) §4. In breve, il guadagno
+delle ombre spende già tutto il margine di pendenza disponibile, e qualsiasi peso che
+decade a zero fa invertire un canale che vale zero — una primaria satura uscita da un
+gamut largo. Il rumore cromatico nelle ombre è un problema di riduzione rumore, non
+qualcosa da contrabbandare dentro una curva di tono che deve promettere di non
+invertire.
+
+L'esponente del ginocchio passa da 3 a **2,5**: a 3 tutto quello sopra +3 stop finiva
+in una banda di 0,139 stop, cioè alte luci piatte. A 2,5 ne restano 0,195, per uno
+spostamento del grigio di 0,008 stop — lo 0,55% di un valore.
+
+### Verifica
+
+- **225 test**, tutti verdi.
+- Il C++ in float32 coincide con il riferimento Python in float64 su **tutta** la
+  corsa di ogni controllo: il fuzz andava a metà scala, adesso va da estremo a
+  estremo.
+- `docs/tone_curve.png` ha due strisce nuove: la stessa rampa blu attraverso il
+  vecchio stadio — culmina a +2 stop e poi **scende** da 0,82 a 0,34 — e attraverso
+  questo, monotona fino in cima.
+
+---
+
 ## S-Log MetaRaw 1.1.0
 
 Questa versione tocca tutte e due le metà del programma. Lo script ha una finestra
