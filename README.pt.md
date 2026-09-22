@@ -214,6 +214,12 @@ Tudo acontece em **luz linear**, no gamut que entra no nó, nesta ordem:
    quanto cada pixel já está saturado, então levanta as cores apagadas e deixa quietas as que já são fortes.
 5. **Color Space / Gamma**: se algum dos dois difere do espaço do nó, há uma conversão através do XYZ, exatamente como um
    Color Space Transform; caso contrário, a imagem é recodificada na curva com que entrou.
+6. **Gamut**: a última coisa antes da codificação. Uma cor fora do espaço em que estamos escrevendo não é um look, é um
+   sinal que ali não pode existir — um LED de palco saturado convertido de S-Gamut3.Cine para Rec.709 mede R −0,125,
+   G −0,292 — e nenhum controle de tom pode consertar isso, porque a prensa multiplica os três canais por um fator
+   *positivo*. A distância de cada canal em relação ao acromático é comprimida na direção de uma assíntota que nunca
+   alcança, que é exatamente o ponto em que aquele canal seria zero: **o nó não pode emitir um canal negativo**. Dentro do
+   gamut não faz nada: uma cor que já está dentro fica abaixo do limiar e sai bit a bit como entrou.
 
 As funções de transferência seguem as definições publicadas: **S-Log, S-Log2 e S-Log3** dos documentos da Sony,
 **DaVinci Intermediate**, **ACEScct**, **Rec.709** (OETF da BT.709), **sRGB** e as gammas puras 2,2 / 2,4 / 2,6. As

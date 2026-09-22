@@ -451,11 +451,14 @@ class ConstantsAgree(unittest.TestCase):
     tests keep passing while comparing two different curves, so compare the source."""
 
     def test_every_tone_constant_matches_the_shared_header(self):
+        """Covers the gamut constants too: they live in the same header and the same
+        Python reference, and could drift apart just as quietly."""
         import re
         header = os.path.join(ROOT, 'ofx', 'SLogMetaRaw', 'DevelopMath.h.in')
         with open(header, encoding='utf-8') as fh:
             cpp = dict((m[0], float(m[1])) for m in
-                       re.findall(r'SM_CONST float SM_(TONE_\w+)\s*=\s*(-?[\d.]+)f', fh.read()))
+                       re.findall(r'SM_CONST float SM_((?:TONE|GAMUT)_\w+)\s*=\s*(-?[\d.]+)f',
+                                  fh.read()))
         self.assertTrue(cpp, 'nessuna costante trovata nel header')
         for name, value in cpp.items():
             self.assertTrue(hasattr(dm, name), 'il modello Python non ha %s' % name)

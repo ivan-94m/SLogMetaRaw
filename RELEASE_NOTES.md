@@ -162,6 +162,40 @@ L'esponente del ginocchio passa da 3 a **2,5**: a 3 tutto quello sopra +3 stop f
 in una banda di 0,139 stop, cioè alte luci piatte. A 2,5 ne restano 0,195, per uno
 spostamento del grigio di 0,008 stop — lo 0,55% di un valore.
 
+### Luci sature: il segnale non va più in negativo
+
+Segnalato su un concerto girato in FX30, con LED di scena forti: «come la giro la
+giro si spappolano le luci e i colori», e sul waveform il blu che si arrovella su se
+stesso. Con l'uscita del nodo su **Rec.709** succedeva; con l'uscita su **DaVinci
+WG**, stesso fotogramma, il waveform era composto. È quella differenza a dire dov'è
+il difetto: non nella curva, nella **matrice di conversione**.
+
+Un LED blu di scena, in S-Gamut3.Cine lineare, convertito in Rec.709 diventa
+**R −0,125 · G −0,292**: negativo prima ancora che il tono c'entri qualcosa, perché
+quel colore fuori dal Rec.709 non esiste. E nessun controllo di tono poteva
+ripararlo — la pressa moltiplica i tre canali per un fattore **positivo**, quindi
+può avvicinare un negativo allo zero e mai portarcelo attraverso: a Highlights −100
+quel −0,125 arrivava solo a −0,072.
+
+Ora, come ultima cosa prima della codifica, i rapporti vengono riportati dentro. Per
+ogni canale si misura la distanza dall'acromatico: vale 0 sul canale più grande,
+esattamente 1 su un canale a zero, e supera 1 **solo** se il canale è negativo.
+Comprimerla verso un asintoto di 1 che non si raggiunge mai significa, alla lettera,
+che **il nodo non può emettere un canale negativo**. È una proprietà, non un clamp.
+
+Dentro al gamut non fa **nulla**: non «pochissimo», nulla. Un colore già dentro sta
+sotto la soglia ed esce bit per bit come è entrato — incarnati e grigi compresi, a
+qualsiasi livello. E il canale massimo non si muove mai: viaggia solo la croma, mai
+il livello, quindi tutto quello che la pressa ha deciso sulla luminosità resta.
+
+**Il prezzo, dichiarato.** La soglia è 0,7, il rientro più graduale: una primaria
+pura del Rec.709 — un canale esattamente a zero, che è legittimamente dentro —
+risale al 6,2% dell'acromatico. Su un'immagine vera è impercettibile, sul waveform è
+decisivo. E attenzione a un'idea che viene naturale ma è sbagliata: **`Color
+Recovery` non lo recupera**, perché è il peso fra i due rami *dentro* la pressa, che
+gira prima della conversione. Sono due stadi in fila; se servirà una leva su questa
+croma dovrà essere un controllo suo.
+
 ### Clip lunghe: i metadata di acquisizione non venivano trovati
 
 Segnalato su una clip FX6 di **1h 37m** in 4K: nel nodo tutti i cursori grigi,
@@ -229,7 +263,7 @@ arrivare alla stessa risposta.
 
 ### Verifica
 
-- **252 test**, tutti verdi.
+- **268 test**, tutti verdi.
 - Il C++ in float32 coincide con il riferimento Python in float64 su **tutta** la
   corsa di ogni controllo: il fuzz andava a metà scala, adesso va da estremo a
   estremo.

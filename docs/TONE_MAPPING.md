@@ -400,6 +400,85 @@ contrabbandato dentro una curva di tono che deve promettere di non invertire.
 
 ---
 
+## 4-bis · Il gamut, che è un problema diverso e va risolto altrove
+
+Segnalato su un concerto girato in FX30, con LED di scena forti e saturi: «come la
+giro la giro si spappolano le luci e i colori», e sul waveform il blu che **si
+arrovella su se stesso**. Quattro schermate col nodo impostato su uscita Rec.709, e
+una quinta con uscita DaVinci WG dove lo stesso fotogramma è pulito. Quella quinta
+schermata *è* la diagnosi.
+
+Un LED blu di scena, `[0,02 0,05 1,50]` in S-Gamut3.Cine lineare, convertito in
+Rec.709 lineare:
+
+```
+R -0,125    G -0,292    B +1,850
+```
+
+Negativo **prima che questo stadio abbia voce in capitolo**. Non lo fa la curva, lo
+fa la matrice: quel colore fuori dal Rec.709 non c'è. Stessa storia su magenta
+(G −0,479), ciano (R −0,550), viola (G −0,396); l'incarnato, che è dentro, non si
+muove di niente.
+
+**E la pressa non può ripararlo.** Non è una questione di taratura:
+
+| Highlights | R | G | B |
+|---|---|---|---|
+| 0 | −0,125 | −0,292 | 1,850 |
+| −50 | −0,123 | −0,288 | 1,829 |
+| −100 | −0,072 | −0,158 | 1,088 |
+
+La pressa moltiplica i tre canali per **un fattore positivo**. Può avvicinare un
+numero negativo allo zero e non può portarcelo attraverso, per quanto la si spinga.
+Lo stesso pixel scritto in DaVinci WG esce `[0,046 0,091 1,311]`, tutto positivo,
+perché quel gamut è abbastanza largo da contenerlo.
+
+Né serve allargare la vasca. A E_TOP 15 stop invece dei 7,74 del contenitore S-Log3,
+a metà corsa il tetto starebbe ancora a **+8,74 stop** — sopra tutto quello che una
+S-Log3 può contenere — e metà cursore non farebbe nulla, che è esattamente il difetto
+di §1.3 rifatto daccapo. I negativi resterebbero comunque, perché nascono dopo.
+
+### Come si risolve
+
+Si riportano dentro i **rapporti**, dopo la conversione e appena prima della
+codifica. Per ogni canale si misura la distanza dall'acromatico
+
+```
+d = (ac − c) / ac          ac = max(R, G, B)
+```
+
+che vale 0 sul canale più grande, esattamente 1 su un canale a zero, e supera 1
+**soltanto** quando il canale è negativo. Comprimere `d` verso un asintoto di 1 che
+non raggiunge mai è quindi, alla lettera, «mai negativo»: una proprietà, non un
+clamp e non un'impostazione di gusto.
+
+Sotto la soglia non si muove niente — non «pochissimo», niente: la distanza è sotto
+`SM_GAMUT_THRESH` e la funzione restituisce il valore identico. Sopra, la stessa
+forma soft-min della pressa, quindi C^∞ oltre la giunzione e nessun contorno dove un
+colore attraversa il bordo del gamut. E il canale massimo non si muove mai: viaggia
+solo la croma, mai il livello, così tutto quello che la pressa ha deciso sulla
+luminosità sopravvive intatto.
+
+### Il compromesso, dichiarato
+
+Una soglia sotto 1 tocca anche colori che stanno legittimamente dentro. A **0,7** —
+il rientro più graduale fra quelli valutati — una primaria pura del Rec.709, cioè un
+canale esattamente a zero, risale al **6,2%** dell'acromatico:
+
+| soglia | primaria pura risale a | saturazione del LED blu (era 1,158 fuori gamut) |
+|---|---|---|
+| 0,7 | 6,2% | 0,976 |
+| 0,8 | 4,1% | 0,990 |
+| 0,9 | 2,1% | 0,998 |
+
+E va detto chiaro, perché è il tipo di cosa che si dà per scontata: **`Color Recovery`
+non lo recupera.** Recovery è il peso fra i due rami *dentro* `sm_tone`, che gira
+**prima** della conversione di gamut; questo stadio viene dopo. Sono due stadi in
+fila, non uno sopra l'altro: Recovery non lo vede e non può annullarlo. Se un domani
+servirà una leva su questa croma, dovrà essere un controllo suo.
+
+---
+
 ## 5 · Dove questo sta rispetto allo stato dell'arte
 
 | | questo nodo | OpenDRT | ACES 2.0 | AgX |

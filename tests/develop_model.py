@@ -233,6 +233,32 @@ def tone(rgb, node_space, highlights, shadows, chroma_recover, e_top=TONE_E_TOP_
     return [film[i] + (keep[i] - film[i]) * w for i in range(3)]
 
 
+# --- gamut (sm_gamut_* of DevelopMath.h) ------------------------------------
+
+GAMUT_THRESH = 0.7
+GAMUT_KNEE = 3.0
+
+
+def gamut_one(v, ac, t, a):
+    d = (ac - v) / ac
+    if d <= t + 1e-6:
+        return v                      # the compressed distance tends to t + x = d
+    x = d - t
+    d = t + (x ** -GAMUT_KNEE + a ** -GAMUT_KNEE) ** (-1.0 / GAMUT_KNEE)
+    return ac * (1.0 - d)
+
+
+def gamut_compress(c):
+    """Reference for sm_gamut_compress: the distance of each channel from the
+    achromatic is compressed towards an asymptote of 1, which is exactly the point
+    at which the channel would be zero - so it can never come out negative."""
+    ac = max(c)
+    if not ac > 1e-9:
+        return list(c)
+    t, a = GAMUT_THRESH, 1.0 - GAMUT_THRESH
+    return [gamut_one(v, ac, t, a) for v in c]
+
+
 # --- false colour (sm_fc_* of DevelopMath.h) --------------------------------
 
 def neutral_uv(shot_k, shot_t, k, t):
@@ -348,7 +374,8 @@ def develop(rgb, node_space, node_gamma, shot=(5600, 0, 800),
     sf = (1 + saturation) * (1 + boost * (1 - sat_now))
     yl = mul(MATS[node_space][0], rgbn)[1]
     rgbn = [yl + (c - yl) * sf for c in rgbn]
-    if out_space == node_space and out_gamma == node_gamma:
-        return [encode1(c, node_gamma) for c in rgbn]
-    o = mul(MATS[out_space][1], mul(MATS[node_space][0], rgbn))
-    return [encode1(c, out_gamma) for c in o]
+    convert = out_space != node_space or out_gamma != node_gamma
+    o = rgbn if not convert else mul(MATS[out_space][1], mul(MATS[node_space][0], rgbn))
+    g = node_gamma if not convert else out_gamma
+    o = gamut_compress(o)      # last thing before the encode, on linear values
+    return [encode1(c, g) for c in o]

@@ -245,6 +245,12 @@ Everything happens in **linear light**, in the gamut entering the node, in this 
    pixel already is, so it lifts the muted colours and leaves the strong ones alone.
 5. **Color Space / Gamma**: if either differs from the node's space, a conversion through XYZ, exactly like a Color Space
    Transform; otherwise the image is re-encoded in the curve it came in with.
+6. **Gamut**: the last thing before the encode. A colour outside the space being written to is not a look, it is a signal
+   that cannot exist there — a saturated stage LED converted from S-Gamut3.Cine to Rec.709 measures R −0.125, G −0.292 —
+   and no tone control can repair it, because the press multiplies all three channels by one *positive* factor. Each
+   channel's distance from the achromatic is compressed towards an asymptote it never reaches, which is exactly the point
+   at which that channel would be zero: **the node cannot emit a negative channel**. Inside the gamut it does nothing at
+   all — not "very little", nothing: an in-gamut colour is below the threshold and comes out bit for bit as it went in.
 
 Transfer functions follow the published definitions: **S-Log, S-Log2 and S-Log3** from the Sony papers, **DaVinci
 Intermediate**, **ACEScct**, **Rec.709** (BT.709 OETF), **sRGB**, and pure gammas 2.2 / 2.4 / 2.6. Gamut matrices, with

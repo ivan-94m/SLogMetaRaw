@@ -513,6 +513,61 @@ SM_FN SMf3 sm_tone(SMf3 rgb, DevelopParams p) {
                 film.z + (keep.z - film.z) * w);
 }
 
+// ---------------------------------------------------------------- gamut
+// A colour outside the gamut we are writing to is not a look, it is a signal that
+// cannot exist there. Converting a saturated stage LED from S-Gamut3.Cine to
+// Rec.709 gives, measured, R -0.125 and G -0.292 - and the waveform folds under
+// zero, which is what "the lights and the colours fall apart" looks like on a scope.
+//
+// The tone press cannot repair that, and not for want of tuning: it multiplies all
+// three channels by one POSITIVE factor, so it can walk a negative towards zero and
+// never through it. Measured on the same pixel, Highlights at -100 takes that
+// -0.125 only as far as -0.072. The same frame written to DaVinci WG comes out
+// entirely positive, which is the whole diagnosis in one line: it is the matrix,
+// not the curve.
+//
+// So the ratios are brought back inside. For each channel the distance from the
+// achromatic, d = (ac - c) / ac with ac = max(R, G, B), is 0 on the largest
+// channel, exactly 1 on a channel sitting at zero, and greater than 1 ONLY when
+// the channel is negative. Compressing d towards an asymptote of 1 it never
+// reaches is therefore, literally, "never negative" - a property, not a clamp and
+// not a taste setting.
+//
+// Below the threshold nothing moves at all, so a picture that was already inside
+// the gamut comes out bit for bit as it went in. Above it, the same soft minimum
+// the press uses, so the join is smooth and a colour crossing the boundary does not
+// print a contour. And the largest channel never moves: only chroma travels, never
+// the level, so everything the tone stage decided about brightness survives this
+// untouched.
+//
+// The threshold is a declared trade. At 0.7 a pure Rec.709 primary - a channel
+// sitting exactly at zero, which is legitimately in gamut - comes back up to 6.2%
+// of the achromatic. That is the price of the gentlest re-entry, and no control
+// gives it back: Color Recovery is the weight between the two branches INSIDE the
+// press, which runs before the conversion, so it cannot see this stage at all.
+SM_CONST float SM_GAMUT_THRESH = 0.7f;   // distance below which nothing is touched
+SM_CONST float SM_GAMUT_KNEE = 3.0f;     // sharpness of the way back in
+
+SM_FN float sm_gamut_one(float v, float ac, float t, float a) {
+    float d = (ac - v) / ac;
+    // The soft minimum below would raise (d - t) to a negative power, so a distance
+    // a hair over the threshold has to take the identity branch it tends to anyway:
+    // for a tiny x the compressed distance IS t + x, which gives back v exactly.
+    if (d <= t + 1e-6f) return v;
+    float x = d - t;
+    d = t + SM_POW(SM_POW(x, -SM_GAMUT_KNEE) + SM_POW(a, -SM_GAMUT_KNEE),
+                   -1.0f / SM_GAMUT_KNEE);
+    return ac * (1.0f - d);
+}
+
+SM_FN SMf3 sm_gamut_compress(SMf3 c) {
+    float ac = SM_MAX(c.x, SM_MAX(c.y, c.z));
+    if (!(ac > 1e-9f)) return c;         // nothing positive to measure against
+    const float t = SM_GAMUT_THRESH, a = 1.0f - t;
+    return smf3(sm_gamut_one(c.x, ac, t, a), sm_gamut_one(c.y, ac, t, a),
+                sm_gamut_one(c.z, ac, t, a));
+}
+
 // ---------------------------------------------------------------- develop one pixel
 
 SM_FN SMf3 sm_develop(SMf3 in, DevelopParams p) {
@@ -565,10 +620,16 @@ SM_FN SMf3 sm_develop(SMf3 in, DevelopParams p) {
     rgb = smf3(yl + (rgb.x - yl) * sf, yl + (rgb.y - yl) * sf, yl + (rgb.z - yl) * sf);
 
     // Color Space / Gamma: like a Color Space Transform from the node space
-    if (p.convert == 0)
-        return smf3(sm_encode(rgb.x, p.nodeGamma), sm_encode(rgb.y, p.nodeGamma), sm_encode(rgb.z, p.nodeGamma));
-    SMf3 o = sm_from_xyz(sm_to_xyz(rgb, p.nodeSpace), p.outSpace);
-    return smf3(sm_encode(o.x, p.outGamma), sm_encode(o.y, p.outGamma), sm_encode(o.z, p.outGamma));
+    SMf3 o = p.convert == 0 ? rgb : sm_from_xyz(sm_to_xyz(rgb, p.nodeSpace), p.outSpace);
+    const int outGamma = p.convert == 0 ? p.nodeGamma : p.outGamma;
+
+    // Last thing before the encode, on linear values, whichever branch we took:
+    // whatever we are writing to, write something that can exist there. It runs on
+    // the no-conversion branch too, because there the node's own space IS the one
+    // being written, and a Rec.709 timeline can be pushed out of its gamut by the
+    // white balance and saturation moves alone.
+    o = sm_gamut_compress(o);
+    return smf3(sm_encode(o.x, outGamma), sm_encode(o.y, outGamma), sm_encode(o.z, outGamma));
 }
 
 #ifndef __METAL_VERSION__
