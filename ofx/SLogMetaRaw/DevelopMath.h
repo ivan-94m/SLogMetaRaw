@@ -29,6 +29,17 @@
 #define SM_MIN fminf
 #endif
 
+// The Tint control, and the as-shot tint that seeds it, are in units of Duv * 3000
+// along the normal to the Planckian locus (see sm_white_xyz). Real illuminants live
+// inside about Duv +-0.01, i.e. +-30 of these units, so +-100 is already three times
+// the whole practical range. Past about 470 the white point leaves the spectral
+// locus, Z goes negative and the von Kries ratios come out NEGATIVE - which is not a
+// colour cast but a broken image, and one no setting of the slider can undo. Sony's
+// acquisition metadata can carry a number well past that (an FX6 clip reading 15.17
+// in Resolve's own Camera Raw panel stores 1517), so the limit is enforced here,
+// once, for every caller.
+#define SM_TINT_LIMIT 100.0
+
 struct SMf3 { float x; float y; float z; };
 
 SM_FN SMf3 smf3(float x, float y, float z) { SMf3 r; r.x = x; r.y = y; r.z = z; return r; }
@@ -49,6 +60,7 @@ struct DevelopParams {
     float norm;        // keeps the luminance of D65 unchanged by the WB move
     float shadows;
     float highlights;
+    float eTop;        // top of the linear tank, stops over 18% grey (sm_tone)
     float contrast;
     float saturation;
     float boost;
@@ -286,37 +298,107 @@ SM_FN SMf3 sm_fc_emit(SMf3 c, DevelopParams p) {
 }
 
 // ---------------------------------------------------------------- tone
-// A highlight shoulder and a shadow toe, both POINTWISE: the output of a pixel
-// depends on that pixel alone, so neither can make a halo. That matters, because
-// the halo people blame on a highlight control is usually not made by it - a
-// pointwise monotone curve cannot invert a gradient or create a local extremum
-// (out = f(in) with f' >= 0 gives grad_out = f'(in) * grad_in, same sign). What it
-// does is *unmask* what clipping was hiding: lens veiling glare around a blown
-// window, codec ringing at a hard edge, a debayer sharpener's overshoot. Compress
-// the top of the scale and those become visible.
+// The scene is a tank of linear light. Middle grey (0.18) is its median, the top of
+// the tank is p.eTop stops above it and the bottom SM_TONE_E_BOT stops below.
 //
-// What this stage can still get wrong, and guards against:
-//  - a knee with a slope or curvature jump prints a contour. In a smooth gradient
-//    the pixels at the knee value form a level set, and around a bright source
-//    those level sets are concentric - a ring that reads exactly like a halo. So
-//    the shoulder is C-infinity: one expression, no junction, nothing to print.
-//  - max(RGB) as the norm switches which channel defines it across an edge where
-//    one channel clips. A pointwise function of a spatially discontinuous quantity
-//    makes fringes. The power norm below is smooth and has no such switch.
-//  - scaling all three channels leaves *saturation* untouched, so a compressed
-//    highlight keeps all its colour and renders as an even, fully chromatic patch
-//    with no internal shading - a bright forehead going flat pink. Purity has to
-//    be reduced explicitly; a ratio-preserving curve never burns out on its own.
+// p.eTop is the top of the curve the CAMERA recorded, not of the timeline and not of
+// the picture: S-Log3 holds +7.74 stops over grey (code 1023 = 38.4 linear), S-Log2
+// +6.26, S-Log +5.76. It is a property of the format, so it is the same number on
+// every frame of every clip shot that way, whatever the timeline is working in.
+// Exposure slides the image up and down INSIDE the tank; the tank never moves. An
+// auto ceiling taken from the brightest pixel - the trick a 32 bit float audio
+// recorder plays with its peak - would make the same Highlights value grade
+// differently shot to shot and flicker across a pan, and it would fight the Exposure
+// control, which is the thing that is supposed to move the picture.
+//
+// Highlights is a press that comes down from the top of the tank. It says where the
+// top stop lands, in stops, and everything below follows proportionally: the stop
+// under the ceiling moves less, the one under that less again, down to middle grey
+// which does not move at all. Negative compresses (at -100 the top of the tank lands
+// exactly on 1.0 linear, the peak a Rec.709 signal can hold); positive expands, which
+// brings a lower scene point up onto the top - the sun that saturates at 60 IRE
+// pulled up to 100 with the detail below it stretched rather than clipped.
+//
+// Both directions are POINTWISE: the output of a pixel depends on that pixel alone,
+// so neither can make a halo. A pointwise monotone curve cannot invert a gradient or
+// create a local extremum (out = f(in) with f' >= 0 gives grad_out = f'(in) * grad_in,
+// same sign). What such a control does is *unmask* what clipping was hiding: lens
+// veiling glare around a blown window, codec ringing at a hard edge, a debayer
+// sharpener's overshoot.
+//
+// What this stage guards against, in order of how badly it bit:
+//  - LOSING MONOTONICITY. The version before this one scaled the three channels by
+//    f(norm)/norm and then pulled them towards luminance by purity = t^k(t). Once f
+//    reached its asymptote it was flat while purity kept falling, so the product FELL:
+//    a brighter chromatic pixel came out darker, and the top of a sky or a neon read
+//    as a negative. Measured, it started at +7.2 stops with Highlights at -10 and at
+//    +4.2 stops at -100 - "after a few clicks the image inverts". It is now impossible
+//    by construction: the two branches below are each monotone in every channel and
+//    the weight between them does not depend on the pixel, so the blend is monotone.
+//  - a knee with a slope or curvature jump prints a contour. In a smooth gradient the
+//    pixels at the knee value form a level set, and around a bright source those level
+//    sets are concentric - a ring that reads exactly like a halo. So the curve is
+//    C-infinity: one expression, no junction, nothing to print.
+//  - max(RGB) as the norm switches which channel defines it across an edge where one
+//    channel clips. A pointwise function of a spatially discontinuous quantity makes
+//    fringes. The power norm below is smooth and has no such switch.
+//  - blending towards the XYZ Y of a wide gamut. The blue coefficient of Y is negative
+//    in DaVinci WG (-0.1478) and in S-Gamut3.Cine (-0.1001), so a saturated blue has
+//    Y < 0 and pulling towards it pushed channels BELOW black inside a bright area.
+//    Y is gone from the hot path; nothing here can make a channel change sign.
 
-SM_CONST float SM_TONE_KNEE = 3.0f;        // shoulder sharpness: 18% grey moves 0.003 stop
-SM_CONST float SM_TONE_PURITY = 0.5f;      // bright skin at +3 stops keeps saturation ~0.30
-SM_CONST float SM_TONE_PURITY_GROW = 1.0f; // and the very top still goes to white
-SM_CONST float SM_TONE_SHAD_MID = -4.0f;   // shadow bell centre, stops from grey
+SM_CONST float SM_TONE_GREY = 0.18f;       // scene linear value of 18% grey
+// Shoulder sharpness, and the one number that decides how far down the press reaches.
+// The drop it applies goes as 2^(n * (e - ceiling)) in stops, so n is literally how
+// sharply the effect dies out below the ceiling: the smaller n is, the further down
+// the tank the press is felt and the more of the compression is spread over the upper
+// scale instead of being piled against the ceiling. Measured at Highlights -100 with
+// an S-Log3 container (grey 18%, skin +1 stop, and the separation kept between +3
+// stops and the top of the container - which is what "detail in the highlights"
+// means numerically):
+//
+//     n     grey       skin      +3..top
+//    2.0   0.023 st   0.088 st   0.284 st
+//    2.5   0.008 st   0.043 st   0.195 st   <- this
+//    3.0   0.003 st   0.022 st   0.139 st
+//
+// n = 3 was the old value and it piles everything above +3 stops into a 0.139 stop
+// band: the highlights go flat, which is the opposite of keeping detail up there.
+// n = 2.5 gives 40% more separation for a midtone move of 0.008 stop, i.e. 0.55% of
+// a value - an order of magnitude below anything visible on a flat field. n = 2 buys
+// another 0.09 stop of separation for three times the midtone move, which is the
+// wrong side of the trade for a control people leave switched on.
+SM_CONST float SM_TONE_KNEE = 2.5f;
+// How sharply the expansion's ceiling on the lift is approached. A hard min(drop, cap)
+// would be only C0 in the gain: the pixels sitting exactly at the corner form a level
+// set, and around a bright source those level sets are concentric - a ring, which is
+// precisely the artefact this whole stage is built to avoid. Measured before this went
+// in: a slope jump of 0.589 at Highlights +100. The soft minimum
+// (drop^-m + cap^-m)^(-1/m) is C-infinity, is below both arguments everywhere, and
+// approaches the cap without reaching it, so the lift is strictly bounded by 2^cap.
+SM_CONST float SM_TONE_CAP_SOFT = 4.0f;
+SM_CONST float SM_TONE_E_BOT = -10.0f;     // bottom of the tank, stops under grey
+SM_CONST float SM_TONE_E_709 = 2.4739311883324122f;  // log2(1/0.18): the peak Rec.709 holds
+SM_CONST float SM_TONE_E_TOP_MIN = 4.0f;   // a clip's container has to be a sane one
+SM_CONST float SM_TONE_E_TOP_MAX = 12.0f;
+SM_CONST float SM_TONE_E_TOP_DEF = 10.0f;  // used when the clip's curve is not a camera one
+SM_CONST float SM_TONE_EXPAND = 2.0f;     // stops of lift at Highlights +100
+SM_CONST float SM_TONE_MIX = 0.5f;         // ratio-preserving vs per-channel at Color Recovery 0
+SM_CONST float SM_TONE_SHAD_OFF = 6.0f;    // shadow bell centre, stops above the tank floor
 SM_CONST float SM_TONE_SHAD_W = 1.8f;      // width: at 2.1 the curve would solarise
 SM_CONST float SM_TONE_SHAD_AMP = 1.5f;    // stops of lift at full
-SM_CONST float SM_TONE_HIGH_MID = 3.5f;   // far enough from grey that it leaves it alone
-SM_CONST float SM_TONE_HIGH_W = 1.6f;
-SM_CONST float SM_TONE_HIGH_AMP = 1.0f;
+
+// Top of the container a given transfer curve records, in stops over 18% grey: what
+// the press comes down from. S-Log3 +7.74 (code 1023 decodes to 38.4 linear), S-Log2
+// +6.26, S-Log +5.76, DaVinci Intermediate +9.12. Linear and the display curves have
+// no ceiling of their own, so they get the default. One definition, shared by the
+// plugin, the Metal kernel and the test harness, so the three cannot drift apart.
+SM_FN float sm_tank_top(int gamma) {
+    float top = sm_decode(1.0f, gamma);
+    if (!(top > 0.0f)) return SM_TONE_E_TOP_DEF;
+    float e = SM_LOG2(top / SM_TONE_GREY);
+    return (e >= SM_TONE_E_TOP_MIN && e <= SM_TONE_E_TOP_MAX) ? e : SM_TONE_E_TOP_DEF;
+}
 
 // norm(x, x, x) = x exactly, so a neutral pixel is untouched whatever the setting.
 SM_FN float sm_tone_norm(SMf3 c) {
@@ -332,55 +414,128 @@ SM_FN float sm_tone_bell(float ev, float mid, float width) {
     return SM_EXP2(-z * z * 1.4426950408889634f);   // exp(-z*z)
 }
 
+// Where the top of the tank has to land, in stops over grey, for this setting.
+// LINEAR in the slider, which is the whole point: the old law put the ceiling at
+// 1/|H| linear, so the first ten clicks moved it from +infinity to +5.8 stops and
+// the remaining ninety were worth 3.3 stops between them.
+// The travel is the same in both directions, so +H is the exact inverse of -H: at -100
+// the top of the tank comes down onto the Rec.709 peak, at +100 the scene point that
+// sits on the Rec.709 peak is taken back up to the top of the tank.
+SM_FN float sm_tone_ceiling(float eTop, float h) {
+    float a = h < 0.0f ? -h : h;
+    return eTop - a * (eTop - SM_TONE_E_709);
+}
+
+// The asymptote that makes the curve below send the top of the tank exactly to the
+// ceiling, in closed form. Solving X_CEIL = X_TOP / (1 + (X_TOP/K)^n)^(1/n) for K:
+//     K = X_TOP / ((X_TOP / X_CEIL)^n - 1)^(1/n)
+// h = 0 gives K = 0, which the callers read as "identity", so the node is exactly
+// neutral at zero without a special case in the curve itself.
+SM_FN float sm_tone_asymptote(float eTop, float h) {
+    float a = h < 0.0f ? -h : h;
+    if (a < 1e-6f || eTop <= SM_TONE_E_709) return 0.0f;
+    float xt = SM_TONE_GREY * SM_EXP2(eTop);
+    float xc = SM_TONE_GREY * SM_EXP2(sm_tone_ceiling(eTop, h));
+    float q = SM_POW(xt / xc, SM_TONE_KNEE) - 1.0f;
+    return q <= 0.0f ? 0.0f : xt / SM_POW(q, 1.0f / SM_TONE_KNEE);
+}
+
+// One primitive, both ways round. Compression is the soft clip
+//     f(x) = x / (1 + (x/K)^n)^(1/n)
+// written as (x^-n + K^-n)^(-1/n): the same curve, but the soft-minimum form never
+// raises a large number to the power n. Written the first way, (x/K)^n overflows
+// float32 past x/K ~ 1.8e19 and the infinite divisor turns the brightest pixel in the
+// frame black; here a huge x simply underflows to 0 and the result lands exactly on K.
+// f(0) = 0 and f'(0) = 1 exactly, C-infinity for x > 0, and the asymptote K is
+// approached but never reached, so no scene value can ever clip.
+//
+// Expansion is the MIRROR of that move, not its inverse: the same displacement in
+// stops, applied upwards, capped at `cap`. The exact inverse f^-1(y) = y/(1-(y/K)^n)^(1/n)
+// diverges as y approaches K - and K sits BELOW the top of the tank, so with the
+// inverse the whole upper part of the picture would hit a wall and come out as one
+// flat value. Measured before the cap went in: at Highlights +50, S-Log3 code 0.80
+// came out at 1.145 and everything above it landed on the same number. The mirror form
+// is x * 2^softmin(drop, cap): monotone (a positive value times a non-decreasing
+// gain), strictly bounded by 2^cap, and it decays going down exactly like the press
+// it mirrors.
+//
+// Odd in x, so a negative channel out of a wide gamut is carried through with its
+// sign and its magnitude treated the same as a positive one.
+SM_FN float sm_tone_curve(float x, float k, float cap, int expand) {
+    if (k <= 0.0f) return x;
+    float s = x < 0.0f ? -1.0f : 1.0f;
+    float ax = x < 0.0f ? -x : x;
+    if (ax < 1e-9f) return x;
+    float f = SM_POW(SM_POW(ax, -SM_TONE_KNEE) + SM_POW(k, -SM_TONE_KNEE),
+                     -1.0f / SM_TONE_KNEE);
+    if (expand == 0) return s * f;
+    float drop = SM_LOG2(ax / f);
+    if (drop < 1e-9f) return x;
+    float lift = SM_POW(SM_POW(drop, -SM_TONE_CAP_SOFT) + SM_POW(cap, -SM_TONE_CAP_SOFT),
+                        -1.0f / SM_TONE_CAP_SOFT);
+    return s * ax * SM_EXP2(lift);
+}
+
 SM_FN SMf3 sm_tone(SMf3 rgb, DevelopParams p) {
+    // Shadows: a bell gain in log2, centred a fixed distance above the floor of the
+    // tank and dying out at both ends, so neither the midtones nor the noise floor
+    // move. It is a gain, so f(0) = 0 at every setting: absolute black stays absolute
+    // black. Its slope never drops below 0.285, which is what keeps it monotone.
+    if (p.shadows != 0.0f) {
+        float n0 = sm_tone_norm(rgb);
+        if (n0 > 1e-6f) {
+            float bell = sm_tone_bell(SM_LOG2(n0 / SM_TONE_GREY),
+                                      SM_TONE_E_BOT + SM_TONE_SHAD_OFF, SM_TONE_SHAD_W);
+            float g = SM_EXP2(p.shadows * SM_TONE_SHAD_AMP * bell);
+            rgb = smf3(rgb.x * g, rgb.y * g, rgb.z * g);
+        }
+    }
+
+    const float k = sm_tone_asymptote(p.eTop, p.highlights);
+    if (k <= 0.0f) return rgb;                  // Highlights at 0: exact identity
+    const int expand = p.highlights > 0.0f ? 1 : 0;
+    const float cap = p.highlights * SM_TONE_EXPAND;
+
+    // Ratio-preserving branch: one factor on all three channels, so the pixel keeps
+    // every bit of the colour it had. On its own it never burns out towards white - a
+    // compressed highlight comes back as an even, fully chromatic patch with no
+    // internal shading, the bright forehead going flat pink.
+    SMf3 keep = rgb;
     float norm = sm_tone_norm(rgb);
-    if (norm <= 1e-6f) return rgb;
-    float ev = SM_LOG2(norm / 0.18f);
-
-    // Shadows, and Highlights when it brightens: a bell in log2 space, centred well
-    // clear of mid grey and dying out at both ends, so neither the midtones nor the
-    // foot of the black move. It is a gain, so f(0) = 0 at every setting: absolute
-    // black stays absolute black, and the noise floor is left where it was.
-    float lift = p.shadows * SM_TONE_SHAD_AMP * sm_tone_bell(ev, SM_TONE_SHAD_MID, SM_TONE_SHAD_W)
-               + SM_MAX(p.highlights, 0.0f) * SM_TONE_HIGH_AMP
-                 * sm_tone_bell(ev, SM_TONE_HIGH_MID, SM_TONE_HIGH_W);
-    float t = SM_EXP2(lift);
-
-    // Highlights when it recovers: the shoulder. Folds the top of the scene towards
-    // an asymptote it never reaches, so however bright the scene is it never clips.
-    float a = SM_MAX(-p.highlights, 0.0f);
-    if (a > 0.0f) {
-        // L / (1 + (L*a)^n)^(1/n) written as (L^-n + a^n)^(-1/n): the same curve,
-        // but the soft-minimum form never raises a large number to the power n.
-        // Written the first way, (L*a)^3 overflows float32 past L*a ~ 7e12 and the
-        // infinite divisor turns the brightest pixel in the frame black. Here a
-        // huge L simply underflows to 0 and the result lands exactly on 1/a, the
-        // asymptote. The early return above keeps L large enough that L^-n is safe.
-        float L = norm * t;
-        t = SM_POW(SM_POW(L, -SM_TONE_KNEE) + SM_POW(a, SM_TONE_KNEE),
-                   -1.0f / SM_TONE_KNEE) / norm;
+    if (norm > 1e-6f) {
+        float t = sm_tone_curve(norm, k, cap, expand) / norm;
+        keep = smf3(rgb.x * t, rgb.y * t, rgb.z * t);
     }
-    SMf3 out = smf3(rgb.x * t, rgb.y * t, rgb.z * t);
 
-    // Purity falls with the compression, which is what takes a recovered sky off
-    // neon and a recovered forehead off flat pink. Color Recovery moves the
-    // exponent: right hands colour back, left goes towards film. It can only ever
-    // restore what the curve took - never add chroma the pixel did not have.
-    // The exponent grows where the curve compressed hardest, the way OpenDRT's
-    // purity limit does. A single power law can hit the skin target or the top of
-    // the scale but not both: without this a sky six stops over stays visibly
-    // coloured while its luminance is already at white.
-    float k = SM_TONE_PURITY * (1.0f + SM_TONE_PURITY_GROW * SM_MAX(1.0f - t, 0.0f))
-            * SM_EXP2(-p.chromaRecover);
-    float purity = t < 1.0f ? SM_POW(t, k) : 1.0f;
-    purity -= SM_MAX(p.chromaRecover, 0.0f) * SM_MAX(lift, 0.0f) * 0.4f;
-    if (purity < 1.0f) {
-        purity = sm_clamp(purity, 0.0f, 1.0f);
-        float yl = sm_to_xyz(out, p.nodeSpace).y;
-        out = smf3(yl + (out.x - yl) * purity, yl + (out.y - yl) * purity,
-                   yl + (out.z - yl) * purity);
-    }
-    return out;
+    // Per-channel branch: the three channels share one ceiling, so climbing they
+    // converge - and converging IS desaturating. That is how film does it: not a
+    // desaturation term bolted on, but three layers saturating together. On its own it
+    // ties the loss of chroma to the DISTANCE between the channels, which flattens a
+    // light, weakly saturated colour like skin while oversaturating mid greens.
+    SMf3 film = smf3(sm_tone_curve(rgb.x, k, cap, expand), sm_tone_curve(rgb.y, k, cap, expand),
+                     sm_tone_curve(rgb.z, k, cap, expand));
+
+    // Color Recovery picks between the two: right hands the colour back, left goes
+    // towards film. Neither branch can ever ADD chroma the pixel did not have. The
+    // weight is the same for every pixel, so the blend of two per-channel monotone
+    // functions is itself per-channel monotone - this is the guarantee the old
+    // purity exponent could not give, and the reason the image cannot invert.
+    //
+    // Color Recovery used to ALSO pull chroma out of shadows it had lifted, on the
+    // grounds that that is where the chroma noise is. It is gone, and not by oversight:
+    // along a ray the result reads t*n0*[1 + (r-1)*s(t)], and monotonicity needs
+    // 1 + (w'/w)/ln2 + shadows*AMP*bell' > 0 for every weight shape w. The shadow lift
+    // alone already spends that budget down to 0.285 at Shadows +100, and any weight
+    // that decays to zero has an unbounded -w'/w, so a channel sitting at zero - a
+    // saturated primary out of a wide gamut - always inverts somewhere. Measured across
+    // shapes: 48497 non-monotone steps with a Gaussian weight, 67912 with a logistic.
+    // Chroma noise in the shadows is a denoise problem; it does not belong smuggled
+    // into a tone curve that has to promise it cannot invert.
+    float w = p.chromaRecover >= 0.0f ? SM_TONE_MIX + p.chromaRecover * (1.0f - SM_TONE_MIX)
+                                      : SM_TONE_MIX * (1.0f + p.chromaRecover);
+    w = sm_clamp(w, 0.0f, 1.0f);
+    return smf3(film.x + (keep.x - film.x) * w, film.y + (keep.y - film.y) * w,
+                film.z + (keep.z - film.z) * w);
 }
 
 // ---------------------------------------------------------------- develop one pixel
@@ -406,13 +561,25 @@ SM_FN SMf3 sm_develop(SMf3 in, DevelopParams p) {
     // before the trims below could scale a deviation or move a stop
     if (p.fcMode != 0) return sm_fc_emit(sm_false_color(xyz, p), p);
 
-    // contrast: a power law on log2 luminance around 18% grey
-    float ev = SM_LOG2(SM_MAX(xyz.y, 1e-6f) / 0.18f);
-    float kk = SM_EXP2(ev * p.contrast);
-    xyz = smf3(xyz.x * kk, xyz.y * kk, xyz.z * kk);
+    SMf3 rgb = sm_from_xyz(xyz, p.nodeSpace);
 
-    // shoulder, toe and chroma: last luminance move, so nothing can push past it
-    SMf3 rgb = sm_tone(sm_from_xyz(xyz, p.nodeSpace), p);
+    // contrast: a power law on log2 of the SAME power norm the tone stage uses, not on
+    // the XYZ luminance. Y has a negative blue coefficient in a wide gamut, so a
+    // saturated blue can have Y <= 0; the old max(Y, 1e-6) then read it as -17.4 stops
+    // and a negative contrast turned that into a gain of ~1e5 on a single pixel. The
+    // norm is non-negative by construction and equals the value itself on a neutral,
+    // so grey still pivots exactly where it did. Scaling in RGB or in XYZ is the same
+    // multiply, so nothing else about this stage changes.
+    if (p.contrast != 0.0f) {
+        float cn = sm_tone_norm(rgb);
+        if (cn > 1e-6f) {
+            float kk = SM_EXP2(SM_LOG2(cn / SM_TONE_GREY) * p.contrast);
+            rgb = smf3(rgb.x * kk, rgb.y * kk, rgb.z * kk);
+        }
+    }
+
+    // press, toe and chroma: last luminance move, so nothing can push past it
+    rgb = sm_tone(rgb, p);
 
     // saturation and color boost (vibrance) around luminance, in the node gamut
     float mx = SM_MAX(rgb.x, SM_MAX(rgb.y, rgb.z));
@@ -446,17 +613,33 @@ static inline void sm_planck_xy(double t, double* x, double* y) {
 }
 // White of an illuminant at temperature k with tint (positive = greener illuminant,
 // so raising Tint makes the image more magenta), as XYZ with Y = 1.
+// This has to be total: it is fed by numbers read out of a file, and a white point
+// that is not a real colour produces NEGATIVE von Kries ratios, which is not a colour
+// cast but a broken image - and one no setting of the slider can undo. So the tint is
+// clamped to SM_TINT_LIMIT, and if the result still fails to be a physical white the
+// point on the Planckian locus itself is returned: a real white, never a broken one.
 static inline void sm_white_xyz(double k, double tint, double out[3]) {
+    if (!(tint > -SM_TINT_LIMIT)) tint = -SM_TINT_LIMIT;       // also catches NaN
+    else if (tint > SM_TINT_LIMIT) tint = SM_TINT_LIMIT;
     double x0, y0, x1, y1;
     sm_planck_xy(k, &x0, &y0);
-    sm_planck_xy(k * 1.01, &x1, &y1);
+    // The tint axis is the normal to the locus, so it needs a second point ON the
+    // locus. sm_planck_xy clamps to 25000 K, so at the top of the range k * 1.01
+    // lands on the same point, the tangent has length zero and the normal is 0/0.
+    // Step the other way there. Both are clamped to the same range, so one of the
+    // two always differs.
+    double k1 = k * 1.01;
+    sm_planck_xy(k1 > 25000.0 ? k / 1.01 : k1, &x1, &y1);
     double d0 = -2.0 * x0 + 12.0 * y0 + 3.0, d1 = -2.0 * x1 + 12.0 * y1 + 3.0;
     double u0 = 4.0 * x0 / d0, v0 = 6.0 * y0 / d0, u1 = 4.0 * x1 / d1, v1 = 6.0 * y1 / d1;
     double du = u1 - u0, dv = v1 - v0, len = sqrt(du * du + dv * dv);
+    if (!(len > 0.0)) { out[0] = x0 / y0; out[1] = 1.0; out[2] = (1.0 - x0 - y0) / y0; return; }
     double nu = -dv / len, nv = du / len;
     if (nv < 0.0) { nu = -nu; nv = -nv; }
     double u = u0 + nu * tint / 3000.0, v = v0 + nv * tint / 3000.0;
-    double d = 2.0 * u - 8.0 * v + 4.0, x = 3.0 * u / d, y = 2.0 * v / d;
+    double d = 2.0 * u - 8.0 * v + 4.0;
+    double x = d != 0.0 ? 3.0 * u / d : -1.0, y = d != 0.0 ? 2.0 * v / d : -1.0;
+    if (!(y > 1e-6) || !(x > 0.0) || !(1.0 - x - y > 0.0)) { x = x0; y = y0; }
     out[0] = x / y; out[1] = 1.0; out[2] = (1.0 - x - y) / y;
 }
 static inline void sm_bradford(const double in[3], double out[3], int inverse) {
@@ -464,13 +647,32 @@ static inline void sm_bradford(const double in[3], double out[3], int inverse) {
     for (int i = 0; i < 3; ++i)
         out[i] = m[i * 3] * in[0] + m[i * 3 + 1] * in[1] + m[i * 3 + 2] * in[2];
 }
+// A white whose CONE RESPONSES are positive. Staying inside the spectral locus is not
+// enough: Tint +100 at 3200 K lands on XYZ (0.920, 1.000, 0.023), which is a colour,
+// but its Bradford S comes out at -0.009 and the von Kries ratio built from it is
+// -152 - one channel of the picture inverted, from two settings the sliders can
+// reach. So the tint is walked back towards zero until the white is one the cones can
+// represent. The control saturates instead of breaking, and only where it was asking
+// for something that does not exist.
+static const double SM_LMS_FLOOR = 0.02;   // of Y, which is 1 here by construction
+
+static inline void sm_white_lms(double k, double tint, double lms[3]) {
+    double xyz[3];
+    for (int i = 0; i < 32; ++i) {
+        sm_white_xyz(k, tint, xyz);
+        sm_bradford(xyz, lms, 0);
+        if (lms[0] > SM_LMS_FLOOR && lms[1] > SM_LMS_FLOOR && lms[2] > SM_LMS_FLOOR) return;
+        tint *= 0.75;
+    }
+    sm_white_xyz(k, 0.0, xyz);
+    sm_bradford(xyz, lms, 0);
+}
+
 // Fill the white-balance fields of DevelopParams from as-shot and chosen Kelvin/tint.
 static inline void sm_set_white_balance(DevelopParams* p, double shotK, double shotTint, double k, double tint) {
-    double ws[3], wt[3], ls[3], lt[3];
-    sm_white_xyz(shotK, shotTint, ws);
-    sm_white_xyz(k, tint, wt);
-    sm_bradford(ws, ls, 0);
-    sm_bradford(wt, lt, 0);
+    double ls[3], lt[3];
+    sm_white_lms(shotK, shotTint, ls);
+    sm_white_lms(k, tint, lt);
     double r[3] = { ls[0] / lt[0], ls[1] / lt[1], ls[2] / lt[2] };
     const double d65[3] = { 0.95046, 1.0, 1.08906 };
     double l65[3], lr[3], nw[3];

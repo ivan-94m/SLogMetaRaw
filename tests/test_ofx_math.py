@@ -45,12 +45,16 @@ class OfxMath(unittest.TestCase):
             for lvl in levels:
                 fc = fcs[(configs.index((ns, ng, os_, og)) + levels.index(lvl)) % len(fcs)]
                 for _ in range(12):
-                    rgb = [rnd.uniform(0.2, 0.7) for _ in range(3)]
+                    # code values across the whole range, including the top where the
+                    # press works and the foot where the level fix does
+                    rgb = [rnd.uniform(0.05, 1.0) for _ in range(3)]
                     shot = (rnd.choice([3200, 4000, 5600]), rnd.choice([0, 5]), rnd.choice([800, 2500]))
                     kw = dict(temp=rnd.uniform(2800, 7500), tint=rnd.uniform(-20, 20), ei=shot[2] * rnd.uniform(0.5, 2),
-                              shadows=rnd.uniform(-0.5, 0.5), highlights=rnd.uniform(-0.5, 0.5),
-                              contrast=rnd.uniform(-0.3, 0.3), saturation=rnd.uniform(-0.3, 0.3),
-                              boost=rnd.uniform(0, 0.5),
+                              # the full travel of every trim, not half of it: the press
+                              # and its expansion only do anything near the ends
+                              shadows=rnd.uniform(-1.0, 1.0), highlights=rnd.uniform(-1.0, 1.0),
+                              contrast=rnd.uniform(-1.0, 1.0), saturation=rnd.uniform(-1.0, 1.0),
+                              boost=rnd.uniform(0, 1.0),
                               level_fix=lvl[0], level_space=lvl[1], level_gamma=lvl[2],
                               level_gain=lvl[3], level_offset=lvl[4],
                               fc_mode=fc[0], fc_u=fc[1], fc_v=fc[2], fc_ku=fc[3],

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The Metal kernel of SLogMetaRaw (compiled at runtime, like Resolve does) must match the CPU path."""
 import os
+import platform
 import shutil
 import subprocess
 import tempfile
@@ -12,6 +13,8 @@ OFX = os.path.join(ROOT, 'ofx', 'SLogMetaRaw')
 
 class Metal(unittest.TestCase):
     def test_kernel_matches_cpu(self):
+        if platform.system() != 'Darwin':
+            self.skipTest('Metal e il suo framework esistono solo su macOS')
         if not shutil.which('clang++') or not os.path.exists(os.path.join(OFX, 'DevelopMathSource.inc')):
             self.skipTest('build the plugin first (make in ofx/SLogMetaRaw)')
         tmp = tempfile.mkdtemp()

@@ -52,7 +52,7 @@ extern char** environ;
 
 #define kOfxNativeConfig "ofx-native-v1.5_aces-v1.3_ocio-v2.3"
 
-static const int kSettingsVersion = 4;   // bump when the meaning of a saved parameter changes
+static const int kSettingsVersion = 5;   // bump when the meaning of a saved parameter changes
 static const double kToneScale = 100.0;  // panel units per unit of DevelopParams
 // data level codes, shared with slogmetaraw/datalevel.py: index = code
 static const char* kLevelNames[] = { "Video (64-940)", "Full (0-1023)" };
@@ -311,6 +311,8 @@ struct ClipMeta
     bool supported = false;
     bool wbEstimated = false;
     double shotTemp = 5600.0, shotTint = 0.0, shotEI = 800.0;
+    double shotTintRaw = 0.0;       // what the record said, before the range check
+    bool shotTintClamped = false;
     int camSpace = -1, camGamma = -1;
     int levelRequired = -1;   // scale the capture gamma needs: -1 unknown, 0 video, 1 full
     int levelHost = -1;       // scale Resolve decoded the clip on ('Auto' -> -1)
@@ -376,8 +378,19 @@ static bool fillClipMeta(const std::string& text, ClipMeta& m)
     if (m.levelHost < 0 || m.levelHost > 1) m.levelHost = -1;
     m.colorSpace = j["color_space"];
     m.fields = j;
-    if (m.shotTemp <= 0.0) m.shotTemp = 5600.0;
-    if (m.shotEI <= 0.0) m.shotEI = 800.0;
+    // Everything below this line came out of a file. A record can be stale, hand
+    // edited, or written by a release whose scaling was wrong, and a white point the
+    // develop maths cannot represent produces NEGATIVE von Kries ratios - a picture
+    // with one channel left, and no slider able to undo it. Same limits as
+    // slogmetaraw/camera.py; the clamp is remembered so the panel can say it happened
+    // instead of silently grading from a number nobody chose.
+    if (!(m.shotTemp >= 1667.0 && m.shotTemp <= 25000.0)) m.shotTemp = 5600.0;
+    if (!(m.shotEI > 0.0)) m.shotEI = 800.0;
+    m.shotTintRaw = m.shotTint;
+    if (!(m.shotTint >= -SM_TINT_LIMIT && m.shotTint <= SM_TINT_LIMIT)) {
+        m.shotTintClamped = true;
+        m.shotTint = m.shotTint > 0.0 ? SM_TINT_LIMIT : (m.shotTint < 0.0 ? -SM_TINT_LIMIT : 0.0);
+    }
     return true;
 }
 
@@ -695,6 +708,14 @@ void SLogMetaRaw::migrateSettings()
     // left both at 0 opens identical; one that used them keeps its numbers and
     // renders differently, which is the point. Nothing is silently zeroed, so the
     // colourist's intent stays visible rather than being thrown away.
+    //
+    // v5 changed what a Highlights number MEANS. It used to set the asymptote to
+    // 1/|H| in linear, a hyperbola: the first ten points of travel moved the ceiling
+    // from infinity down to +5.8 stops and the remaining ninety were worth 3.3 stops
+    // between them. It now says, linearly, where the top of the recorded container
+    // lands - -100 puts it on the Rec.709 peak. The same number therefore grades
+    // differently, and much less violently, than it did. Same reasoning as v4: the
+    // value is kept, not zeroed, so what the colourist asked for stays on screen.
     m_SettingsVersion->setValue(kSettingsVersion);
 }
 
@@ -729,7 +750,12 @@ void SLogMetaRaw::syncMetadata(bool p_Force)
         for (int i = 0; i < kDetailCount; ++i) setText(m_Details[i], "—");
         setText(m_Details[kDetailCount - 1], path.substr(path.find_last_of('/') + 1));
         setText(m_Status, status);
-        m_BoundPath->setValue(path);
+        // deliberately NOT binding boundPath here. Binding on a failed read is what
+        // let the node drift: an MXF whose first parse ran past the watchdog bound the
+        // clip anyway, so when the cache appeared later the hidden shot values were
+        // refreshed and the visible sliders were not, and the node developed from a
+        // reference the colourist never chose. Leaving it unbound means the first
+        // reading that actually succeeds still seeds the controls.
         updateEnabledness();
         return;
     }
@@ -738,9 +764,25 @@ void SLogMetaRaw::syncMetadata(bool p_Force)
         auto it = meta.fields.find(kDetails[i].key);
         setText(m_Details[i], it != meta.fields.end() && !it->second.empty() ? it->second : "—");
     }
-    if (m_ShotTemp->getValue() != meta.shotTemp) m_ShotTemp->setValue(meta.shotTemp);
-    if (m_ShotTint->getValue() != meta.shotTint) m_ShotTint->setValue(meta.shotTint);
-    if (m_ShotEI->getValue() != meta.shotEI) m_ShotEI->setValue(meta.shotEI);
+    // The shot values can change under a node that is already bound: a cache written
+    // after the first read failed, a "Rileggi metadata", a corrected scaling in a new
+    // release. A slider still sitting on the OLD shot value is one the colourist never
+    // touched, so it follows; one that was moved is a grading decision and is left
+    // exactly where it is.
+    const double oldK = m_ShotTemp->getValue(), oldT = m_ShotTint->getValue(),
+                 oldEI = m_ShotEI->getValue();
+    if (oldK != meta.shotTemp) {
+        m_ShotTemp->setValue(meta.shotTemp);
+        if (m_Temp->getValue() == oldK) m_Temp->setValue(meta.shotTemp);
+    }
+    if (oldT != meta.shotTint) {
+        m_ShotTint->setValue(meta.shotTint);
+        if (m_Tint->getValue() == oldT) m_Tint->setValue(meta.shotTint);
+    }
+    if (oldEI != meta.shotEI) {
+        m_ShotEI->setValue(meta.shotEI);
+        if (m_EI->getValue() == oldEI) m_EI->setValue(meta.shotEI);
+    }
     if (m_CamSpace->getValue() != meta.camSpace) m_CamSpace->setValue(meta.camSpace);
     if (m_CamGamma->getValue() != meta.camGamma) m_CamGamma->setValue(meta.camGamma);
     if (m_LevelRequired->getValue() != meta.levelRequired) m_LevelRequired->setValue(meta.levelRequired);
@@ -751,7 +793,13 @@ void SLogMetaRaw::syncMetadata(bool p_Force)
         setText(m_Status, "Profilo " + meta.colorSpace + " non logaritmico: il nodo resta neutro" + note);
     } else {
         if (!m_MetaValid->getValue()) m_MetaValid->setValue(true);
-        setText(m_Status, status + (meta.wbEstimated ? " · Kelvin stimato (la camera non lo registra)" : "") + note);
+        char tintNote[160] = "";
+        if (meta.shotTintClamped)
+            snprintf(tintNote, sizeof(tintNote),
+                     " · tint di ripresa %.2f fuori scala, limitato a %+.0f: controlla il valore "
+                     "nel pannello Camera Raw di Resolve", meta.shotTintRaw, meta.shotTint);
+        setText(m_Status, status + (meta.wbEstimated ? " · Kelvin stimato (la camera non lo registra)" : "")
+                        + tintNote + note);
         if (!sameClip || p_Force) {
             m_WBMode->setValue(0);
             m_Temp->setValue(meta.shotTemp);
@@ -853,17 +901,26 @@ bool SLogMetaRaw::buildParams(double p_Time, DevelopParams& p, std::string* p_No
     int nodeSpace = 0, nodeGamma = 0, input = 0;
     m_NodeInput->getValue(input);
     std::string hostCs = m_SrcClip->getPropertySet().propGetString(kOfxImageClipPropColourspace, false);
+    bool hostCsUnknown = false;
     if (input > 0) {
         nodeSpace = kNodeInputPairs[input][0];
         nodeGamma = kNodeInputPairs[input][1];
     } else if (!mapColourspace(hostCs, nodeSpace, nodeGamma)) {
         // no colour management info: nodes receive the camera encoding (DaVinci YRGB)
+        hostCsUnknown = !hostCs.empty();
         const int cs = m_CamSpace->getValue(), cg = m_CamGamma->getValue();
         if (cs >= 0 && cg >= 0) { nodeSpace = cs; nodeGamma = cg; }
     }
     if (p_NodeInfo) {
         *p_NodeInfo = std::string("Ingresso nodo: ") + kSpaceNames[nodeSpace] + " / " + kGammaNames[nodeGamma]
                     + (hostCs.empty() ? "" : " (Resolve: " + hostCs + ")");
+        // A wrong guess here is invisible until you touch something - the decode and
+        // the encode are exact inverses, so with every control at rest the error
+        // cancels and the picture looks right. Say it out loud rather than assume.
+        if (hostCsUnknown)
+            *p_NodeInfo += " · ATTENZIONE: spazio dichiarato da Resolve non riconosciuto, "
+                           "sto assumendo la codifica della camera · se il colore e sbagliato "
+                           "scegli tu Ingresso nodo";
     }
 
     p.nodeSpace = nodeSpace;
@@ -927,8 +984,27 @@ bool SLogMetaRaw::buildParams(double p_Time, DevelopParams& p, std::string* p_No
     const double shotEI = m_ShotEI->getValue();
     const double ei = m_EI->getValueAtTime(p_Time);
     p.expo = (shotEI > 0.0 && ei > 0.0) ? (float)(ei / shotEI) : 1.0f;
-    sm_set_white_balance(&p, m_ShotTemp->getValue(), m_ShotTint->getValue(), m_Temp->getValueAtTime(p_Time),
-                         m_Tint->getValueAtTime(p_Time));
+    // "As shot" has to MEAN as shot, at every moment, not only in the instant the menu
+    // was clicked. The sliders are seeded from the metadata when the node binds to a
+    // clip; if the metadata arrives after that - an MXF whose first parse ran past the
+    // watchdog, a cache the script wrote later - the hidden shot values move and the
+    // visible ones do not. The node then develops from a reference nobody chose, while
+    // the menu still reads "As shot". On an FX6 that came out as a picture with only
+    // its green channel left, correct again only when the menu was clicked back onto
+    // "As shot", because clicking it is what re-seeded the sliders. Reading the shot
+    // values straight through while the menu says so makes that drift impossible.
+    int wbMode = kWBCustom;
+    m_WBMode->getValue(wbMode);
+    const bool asShot = (wbMode == 0);
+    const double chosenK = asShot ? m_ShotTemp->getValue() : m_Temp->getValueAtTime(p_Time);
+    const double chosenT = asShot ? m_ShotTint->getValue() : m_Tint->getValueAtTime(p_Time);
+    sm_set_white_balance(&p, m_ShotTemp->getValue(), m_ShotTint->getValue(), chosenK, chosenT);
+
+    // Top of the linear tank the tone stage presses down from: the ceiling of the
+    // curve the CAMERA recorded (S-Log3 +7.74 stops over grey, S-Log2 +6.26), which is
+    // a property of the format and so is the same on every frame of every clip shot
+    // that way, whatever the timeline is working in. Never taken from the picture.
+    p.eTop = sm_tank_top(camGammaCode >= 0 ? camGammaCode : nodeGamma);
 
     // ---- false colour: a measuring view for one of the three controls -------
     int fc = 0;

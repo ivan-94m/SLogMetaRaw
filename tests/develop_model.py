@@ -84,16 +84,44 @@ def uv_xy(u, v):
     return 3 * u / d, 2 * v / d
 
 
+TINT_LIMIT = 100.0   # SM_TINT_LIMIT of DevelopMath.h
+LMS_FLOOR = 0.02     # SM_LMS_FLOOR: the cone responses of a usable white
+
+
 def white_xyz(k, tint):
-    u0, v0 = xy_uv(*planck_xy(k))
-    u1, v1 = xy_uv(*planck_xy(k * 1.01))
+    """Reference for sm_white_xyz: clamped tint, and never a non-physical white."""
+    tint = min(max(tint, -TINT_LIMIT), TINT_LIMIT)
+    px, py = planck_xy(k)
+    u0, v0 = xy_uv(px, py)
+    # a second point ON the locus: planck_xy clamps at 25000 K, where k * 1.01 would
+    # land on the same point and leave the normal as 0/0
+    k1 = k * 1.01
+    u1, v1 = xy_uv(*planck_xy(k / 1.01 if k1 > 25000 else k1))
     du, dv = u1 - u0, v1 - v0
     l = math.hypot(du, dv)
+    if not l > 0:
+        return [px / py, 1.0, (1 - px - py) / py]
     n = (-dv / l, du / l)
     if n[1] < 0:
         n = (-n[0], -n[1])
-    x, y = uv_xy(u0 + n[0] * tint / 3000, v0 + n[1] * tint / 3000)
+    u, v = u0 + n[0] * tint / 3000, v0 + n[1] * tint / 3000
+    d = 2 * u - 8 * v + 4                       # guarded, as sm_white_xyz is
+    x, y = (3 * u / d, 2 * v / d) if d != 0 else (-1.0, -1.0)
+    if not (y > 1e-6) or not (x > 0.0) or not (1 - x - y > 0.0):
+        x, y = px, py
     return [x / y, 1.0, (1 - x - y) / y]
+
+
+def white_lms(k, tint):
+    """Reference for sm_white_lms: a white whose CONE RESPONSES are positive. Inside
+    the spectral locus is not enough - Tint +100 at 3200 K gives Bradford S = -0.009
+    and a von Kries ratio of -152. The tint walks back until the white is usable."""
+    for _ in range(32):
+        lms = mul(BR, white_xyz(k, tint))
+        if min(lms) > LMS_FLOOR:
+            return lms
+        tint *= 0.75
+    return mul(BR, white_xyz(k, 0.0))
 
 
 def fix_levels(lin, node_space, level_space, level_gamma, gain, offset):
@@ -106,11 +134,31 @@ def fix_levels(lin, node_space, level_space, level_gamma, gain, offset):
     return cam if same else mul(MATS[node_space][1], mul(MATS[level_space][0], cam))
 
 
-# --- tone: shoulder, toe and chroma (sm_tone* of DevelopMath.h) -------------
+# --- tone: the press, the toe and the chroma (sm_tone* of DevelopMath.h) ---------
 
-TONE_KNEE, TONE_PURITY, TONE_PURITY_GROW = 3.0, 0.5, 1.0
-TONE_SHAD_MID, TONE_SHAD_W, TONE_SHAD_AMP = -4.0, 1.8, 1.5
-TONE_HIGH_MID, TONE_HIGH_W, TONE_HIGH_AMP = 3.5, 1.6, 1.0
+TONE_GREY = 0.18
+GREY = TONE_GREY
+TONE_KNEE = 2.5                             # see SM_TONE_KNEE: grey 0.008 st, +3..top 0.195 st
+TONE_CAP_SOFT = 4.0                         # soft minimum on the expansion's lift
+TONE_E_BOT = -10.0
+TONE_E_709 = 2.4739311883324122             # log2(1 / 0.18)
+TONE_E_TOP_MIN, TONE_E_TOP_MAX = 4.0, 12.0
+TONE_E_TOP_DEF = 10.0
+TONE_EXPAND = 2.0                           # stops of lift at Highlights +100
+TONE_MIX = 0.5
+TONE_SHAD_OFF, TONE_SHAD_W, TONE_SHAD_AMP = 6.0, 1.8, 1.5
+
+
+def tank_top(gamma):
+    """Reference for sm_tank_top: top of the container a transfer curve records, in
+    stops over 18% grey. S-Log3 +7.74, S-Log2 +6.26, S-Log +5.76."""
+    try:
+        top = math.log2(decode1(1.0, gamma) / GREY)
+    except (ValueError, OverflowError):
+        return TONE_E_TOP_DEF
+    if not TONE_E_TOP_MIN <= top <= TONE_E_TOP_MAX:
+        return TONE_E_TOP_DEF
+    return top
 
 
 def tone_norm(c):
@@ -124,28 +172,65 @@ def tone_bell(ev, mid, width):
     return math.exp(-z * z)
 
 
-def tone(rgb, node_space, highlights, shadows, chroma_recover):
+def tone_ceiling(e_top, h):
+    """Where the top of the tank lands, in stops over grey. Linear in the slider, and
+    the same travel both ways, so +H is the exact inverse of -H."""
+    return e_top - abs(h) * (e_top - TONE_E_709)
+
+
+def tone_asymptote(e_top, h):
+    """K such that the curve sends the top of the tank exactly onto the ceiling.
+    0 means 'identity', which is what h = 0 gives without a special case."""
+    if abs(h) < 1e-6 or e_top <= TONE_E_709:
+        return 0.0
+    xt = GREY * 2 ** e_top
+    xc = GREY * 2 ** tone_ceiling(e_top, h)
+    q = (xt / xc) ** TONE_KNEE - 1.0
+    return 0.0 if q <= 0 else xt / q ** (1.0 / TONE_KNEE)
+
+
+def tone_curve(x, k, cap, expand):
+    """Compression x / (1 + (x/k)^n)^(1/n) in soft-minimum form, or the MIRROR of the
+    same displacement applied upwards and capped. Odd in x, f(0) = 0, f'(0) = 1,
+    monotone either way round and bounded either way round."""
+    if k <= 0:
+        return x
+    s = -1.0 if x < 0 else 1.0
+    ax = abs(x)
+    if ax < 1e-9:
+        return x
+    f = (ax ** -TONE_KNEE + k ** -TONE_KNEE) ** (-1.0 / TONE_KNEE)
+    if not expand:
+        return s * f
+    drop = math.log2(ax / f)
+    if drop < 1e-9:
+        return x
+    lift = (drop ** -TONE_CAP_SOFT + cap ** -TONE_CAP_SOFT) ** (-1.0 / TONE_CAP_SOFT)
+    return s * ax * 2 ** lift
+
+
+def tone(rgb, node_space, highlights, shadows, chroma_recover, e_top=TONE_E_TOP_DEF):
+    rgb = list(rgb)
+    if shadows != 0.0:
+        n0 = tone_norm(rgb)
+        if n0 > 1e-6:
+            bell = tone_bell(math.log2(n0 / GREY), TONE_E_BOT + TONE_SHAD_OFF, TONE_SHAD_W)
+            rgb = [c * 2 ** (shadows * TONE_SHAD_AMP * bell) for c in rgb]
+    k = tone_asymptote(e_top, highlights)
+    if k <= 0:
+        return rgb                              # Highlights at 0: exact identity
+    expand = 1 if highlights > 0 else 0
+    cap = highlights * TONE_EXPAND
+    keep = list(rgb)
     norm = tone_norm(rgb)
-    if norm <= 1e-6:
-        return list(rgb)
-    ev = math.log2(norm / 0.18)
-    lift = (shadows * TONE_SHAD_AMP * tone_bell(ev, TONE_SHAD_MID, TONE_SHAD_W)
-            + max(highlights, 0.0) * TONE_HIGH_AMP * tone_bell(ev, TONE_HIGH_MID, TONE_HIGH_W))
-    t = 2 ** lift
-    a = max(-highlights, 0.0)
-    if a > 0.0:
-        # soft-minimum form, see sm_tone: never raises a large number to TONE_KNEE
-        L = norm * t
-        t = (L ** -TONE_KNEE + a ** TONE_KNEE) ** (-1.0 / TONE_KNEE) / norm
-    out = [c * t for c in rgb]
-    k = TONE_PURITY * (1.0 + TONE_PURITY_GROW * max(1.0 - t, 0.0)) * 2 ** (-chroma_recover)
-    purity = t ** k if t < 1.0 else 1.0
-    purity -= max(chroma_recover, 0.0) * max(lift, 0.0) * 0.4
-    if purity < 1.0:
-        purity = min(max(purity, 0.0), 1.0)
-        yl = mul(MATS[node_space][0], out)[1]
-        out = [yl + (c - yl) * purity for c in out]
-    return out
+    if norm > 1e-6:
+        t = tone_curve(norm, k, cap, expand) / norm
+        keep = [c * t for c in rgb]
+    film = [tone_curve(c, k, cap, expand) for c in rgb]
+    w = (TONE_MIX + chroma_recover * (1.0 - TONE_MIX) if chroma_recover >= 0
+         else TONE_MIX * (1.0 + chroma_recover))
+    w = min(max(w, 0.0), 1.0)
+    return [film[i] + (keep[i] - film[i]) * w for i in range(3)]
 
 
 # --- false colour (sm_fc_* of DevelopMath.h) --------------------------------
@@ -153,7 +238,7 @@ def tone(rgb, node_space, highlights, shadows, chroma_recover):
 def neutral_uv(shot_k, shot_t, k, t):
     """CIE 1960 uv a neutral pixel lands on after the white balance, as neutralUV()."""
     d65 = [0.95046, 1.0, 1.08906]
-    ws, wt = mul(BR, white_xyz(shot_k, shot_t)), mul(BR, white_xyz(k, t))
+    ws, wt = white_lms(shot_k, shot_t), white_lms(k, t)
     r = [ws[i] / wt[i] for i in range(3)]
     lms = mul(BR, d65)
     xyz = mul(BRI, [lms[i] * r[i] for i in range(3)])
@@ -223,7 +308,7 @@ def develop(rgb, node_space, node_gamma, shot=(5600, 0, 800),
             shadows=0.0, highlights=0.0, contrast=0.0, saturation=0.0, boost=0.0, decode_meta=False,
             level_fix=0, level_space=0, level_gamma=0, level_gain=1.0, level_offset=0.0,
             fc_mode=0, fc_u=0.0, fc_v=0.0, fc_ku=0.0, fc_kv=0.0, fc_tu=0.0, fc_tv=0.0,
-            chroma_recover=0.0):
+            chroma_recover=0.0, e_top=None):
     shot_k, shot_t, shot_ei = shot
     temp = shot_k if temp is None else temp
     tint = shot_t if tint is None else tint
@@ -240,7 +325,7 @@ def develop(rgb, node_space, node_gamma, shot=(5600, 0, 800),
     lin = [c * (ei / shot_ei) for c in lin]
     xyz = mul(MATS[node_space][0], lin)
     k, t = (PRESETS[wb_mode], 0.0) if wb_mode in PRESETS else (temp, tint)
-    ws, wt = mul(BR, white_xyz(shot_k, shot_t)), mul(BR, white_xyz(k, t))
+    ws, wt = white_lms(shot_k, shot_t), white_lms(k, t)
     r = [ws[i] / wt[i] for i in range(3)]
     lms = mul(BR, xyz)
     xyz = mul(BRI, [lms[i] * r[i] for i in range(3)])
@@ -250,10 +335,14 @@ def develop(rgb, node_space, node_gamma, shot=(5600, 0, 800),
     if fc_mode:   # measured before the trims below, so it answers only to the three controls
         return fc_emit(false_color(xyz, fc_mode, fc_u, fc_v, fc_ku, fc_kv, fc_tu, fc_tv),
                        node_space, node_gamma, out_space, out_gamma)
-    ev = math.log2(max(xyz[1], 1e-6) / 0.18)
-    kk = 2 ** (ev * contrast)
-    xyz = [c * kk for c in xyz]
-    rgbn = tone(mul(MATS[node_space][1], xyz), node_space, highlights, shadows, chroma_recover)
+    rgbn = mul(MATS[node_space][1], xyz)
+    if contrast != 0.0:
+        cn = tone_norm(rgbn)
+        if cn > 1e-6:
+            kk = 2 ** (math.log2(cn / GREY) * contrast)
+            rgbn = [c * kk for c in rgbn]
+    rgbn = tone(rgbn, node_space, highlights, shadows, chroma_recover,
+                tank_top(node_gamma) if e_top is None else e_top)
     mx, mn = max(rgbn), min(rgbn)
     sat_now = min(max((mx - mn) / mx, 0), 1) if mx > 1e-6 else 0
     sf = (1 + saturation) * (1 + boost * (1 - sat_now))

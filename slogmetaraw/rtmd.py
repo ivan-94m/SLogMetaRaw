@@ -230,7 +230,16 @@ TAGS = {
     0x8116: ('gamma_for_cdl', 'Gamma for CDL', _u, F_STR),
     0x8119: ('exposure_index_2', 'Exposure index (32-bit)', _u, F_STR),
     0x811e: ('iso_2', 'ISO sensitivity (32-bit)', _u, F_STR),
-    0x811f: ('tint', 'Tint Correction', _s, F_STR),
+    # Sony records the tint as a signed integer in HUNDREDTHS of a tint unit: an FX6
+    # clip that Catalyst Browse and Resolve's Camera Raw both read as 15.17 carries
+    # 1517 here. Handing the raw integer to a white-balance model turns a routine
+    # green/magenta trim into a white point far outside the spectral locus, whose von
+    # Kries ratios come out negative - measured on FX6_0024.MXF: R -0.95, G +1.17,
+    # B -1.73, i.e. a picture with only its green channel left, and no setting of the
+    # Tint slider able to undo it. Scaled here, once, so the number this decoder
+    # reports is the one the camera menu, Catalyst and Resolve all show.
+    0x811f: ('tint', 'Tint Correction', lambda d: _s(d) / 100.0 if _s(d) is not None else None,
+             f_num('%g')),
     0x8120: ('luminance_code_range', 'Luminance code range', _enum(LUMA_RANGE), F_STR),
     # GPS
     0x8500: ('gps_version', 'GPS version', lambda d: '.'.join(str(b) for b in d[:4]), F_STR),

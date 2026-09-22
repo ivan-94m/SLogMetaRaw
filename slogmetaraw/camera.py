@@ -29,13 +29,38 @@ def camera_space(meta):
     raise NotSupported('Profilo "%s" non logaritmico: S-Log MetaRaw richiede S-Log2/S-Log3.' % cs)
 
 
+# The plugin's Tint control runs -100..+100, in units of Duv * 3000 along the normal
+# to the Planckian locus (SM_TINT_LIMIT / sm_white_xyz in DevelopMath.h). An as-shot
+# value outside that range cannot be cancelled by the slider, which is what makes a
+# wrong one uncorrectable rather than merely wrong.
+TINT_LIMIT = 100.0
+KELVIN_MIN, KELVIN_MAX = 1667, 25000   # the range sm_planck_xy is defined over
+
+
 def shot_values(meta):
-    """As-shot (Kelvin, tint, EI, estimated_wb) from the clip metadata."""
+    """As-shot (Kelvin, tint, EI, estimated_wb) from the clip metadata.
+
+    Everything here comes out of a file, so everything here is range checked: a value
+    the develop maths cannot represent must never reach it.
+    """
     k = meta.get('white_balance_k')
     estimated = False
-    if not k:
+    if not k or not KELVIN_MIN <= k <= KELVIN_MAX:
         k = PRESET_KELVIN.get(meta.get('lighting_preset'), 5600)
         estimated = True
     tint = meta.get('tint') or 0
+    try:
+        tint = float(tint)
+    except (TypeError, ValueError, OverflowError):
+        tint = 0.0
+    if tint != tint:                       # NaN
+        tint = 0.0
+    tint = min(max(tint, -TINT_LIMIT), TINT_LIMIT)
     ei = meta.get('exposure_index') or meta.get('iso') or 800
-    return int(k), float(tint), int(ei), estimated
+    try:
+        ei = int(ei)
+    except (TypeError, ValueError, OverflowError):   # int(inf) raises OverflowError
+        ei = 800
+    if ei <= 0:
+        ei = 800
+    return int(k), tint, ei, estimated

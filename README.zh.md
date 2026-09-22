@@ -81,9 +81,9 @@ S-Log MetaRaw 把这些信息读出来并重新派上用场：白平衡、曝光
 | **False color：色温 / 色调 / 曝光** | 开 · 关 | 关 | 每个控件一个测量视图，各自位于所服务滑块的上方。曝光视图按 ARRI 方式以 18% 中灰为中心划分档位；两个白平衡视图**以开尔文和色调单位**读出与中性的距离，因此色带直接告诉你滑块还差多少。白色 = 中性。一次只能开一个，且该视图会替换画面：渲染前请关闭。[docs/FALSE_COLOR.md](docs/FALSE_COLOR.md) |
 | **Color Space** | Timeline · DaVinci WG · Rec.709 · Rec.2020 · P3 D65 · P3 D60 · P3 DCI · S-Gamut · S-Gamut3 · S-Gamut3.Cine · ACES AP0 · ACES AP1 | Timeline | 输出色域，相当于 Color Space Transform。*Timeline* 不做转换 |
 | **Gamma** | Timeline · DaVinci Intermediate · Linear · Gamma 2.2 · Gamma 2.4 · Gamma 2.6 · Rec.709 · sRGB · SLog · SLog2 · SLog3 · ACEScct | Timeline | 输出曲线。*Timeline* 不做转换 |
-| **Toni › Highlights** | −100 … +100 | 0 | 负值是胶片式肩部：把高光折向一个永远达不到的渐近线，因此绝不裁切，而 18% 中灰仅移动 0.003 档。全量时可把 S-Log3 中灰之上约 6 档的信息装进 Rec.709 能容纳的 2.47 档内。正值则提亮高光 |
+| **Toni › Highlights** | −100 … +100 | 0 | 以档为单位指明**所录制容器的顶端落在哪里**。负值把它压向一个永远达不到的渐近线，因此绝不裁切，18% 中灰仅移动 0.008 档。在 −100 时，S-Log3 中灰之上的 +7.74 档正好落在 1.0 线性值，即 Rec.709 信号所能容纳的峰值。正值则做镜像：把标度顶端拉伸最多 2 档，把尚未到达峰值就饱和的高光重新提到峰值。行程在滑块上是**线性的**，每一格的份量相同 |
 | **Toni › Shadows** | −100 … +100 | 0 | 在 −4 档附近打开或压暗暗部细节。它是乘性增益，因此任何设置下绝对黑仍为黑，−8 档以下的趾部原样不动 |
-| **Toni › Color Recovery** | −100 … +100 | 0 | 恢复操作如何影响色彩。向右把色彩还给被恢复的高光——明亮的额头保留暖调，而不会变成一片死板的粉色——并从被提亮的暗部（噪点所在）中去除色度。向左则趋近胶片。[docs/TONE_MAPPING.md](docs/TONE_MAPPING.md) |
+| **Toni › Color Recovery** | −100 … +100 | 0 | 压制还回多少色彩。它是同一条曲线两种施加方式之间的权重：对三个通道施加同一个系数，完整保留场景色彩；以及逐通道施加，三个通道共用一个上限，上升时彼此收敛——因为收敛**就是**去饱和，胶片正是这样做的。向右保留色彩，向左趋近胶片。它绝不会添加像素本来没有的色彩。这是让恢复后的天空褪去霓虹感、让明亮额头不变成死板粉色的有机手段。[docs/TONE_MAPPING.md](docs/TONE_MAPPING.md) |
 | **Toni:** Color Boost、Saturation、Contrast | −100 … +100 | 0 | 色彩与对比度微调 |
 | **Avanzate › Ingresso nodo**（高级 › 节点输入） | Automatico · DaVinci WG/Intermediate · S-Gamut3.Cine/S-Log3 · S-Gamut3/S-Log3 · S-Gamut/S-Log2 · ACES AP1/ACEScct | Automatico | 进入节点的色彩空间。*Automatico* 向 Resolve 询问；只有当 Resolve 给出的答案不对时才手动更改 |
 | **Avanzate › Data level in ingresso**（高级 › 输入数据电平） | Automatico · Full (0-1023) · Video (64-940) · Nessuna correzione | Automatico | Resolve 解码该片段所用的 code value 标度。*Automatico* 读取片段的 Data Level 属性；只要它仍为 *Auto*，就不做任何修正，因为 Resolve 实际采用的值无法通过任何 API 读取。对于没有任何 NLE 能正确标记的文件（例如同一条素材的 Atomos ProRes），请手动声明 — 参见 [docs/DATA_LEVELS.md](docs/DATA_LEVELS.md) |

@@ -23,6 +23,7 @@ int main() {
         p.expo = ei / shotEI;
         sm_set_white_balance(&p, shotK, shotT, k, t);
         p.shadows = sh; p.highlights = hi; p.contrast = co; p.saturation = sa; p.boost = bo;
+        p.eTop = sm_tank_top(ng);   // as buildParams does when the clip has no camera curve
         p.levelFix = lfix; p.levelSpace = lspace; p.levelGamma = lgamma;
         p.levelGain = lgain; p.levelOffset = loff;
         p.fcMode = fcm; p.fcU = fcu; p.fcV = fcv;
