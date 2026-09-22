@@ -74,14 +74,42 @@ def _format_name(container, video_codec, width):
     return (fam + ' ' + res).strip()
 
 
-def _color_space(gamma, primaries):
+# Sony's NonRealTimeMeta XML writes the capture profile in its own spelling, lower
+# case and hyphenated: "s-log3-cine", "s-gamut3-cine". It is the SAME fact the RTMD
+# carries in tags 0x3210/0x3219, and on a clip whose RTMD we cannot reach it is the
+# only copy left - the XML is a few-KB sidecar, so it survives whatever the essence
+# layout does. Mapping it back to the canonical names is what lets the node work
+# from the sidecar alone.
+XML_GAMUT = {'s-gamut3-cine': 'S-Gamut3.Cine', 's-gamut3.cine': 'S-Gamut3.Cine',
+             's-gamut3': 'S-Gamut3', 's-gamut': 'S-Gamut'}
+
+
+def _color_space_from_xml(xml_gamma, xml_primaries):
+    """Canonical profile name from the NRT XML, or '' when it does not say clearly."""
+    g = (xml_gamma or '').strip().lower().replace('_', '-')
+    p = (xml_primaries or '').strip().lower().replace('_', '-')
+    if not g:
+        return ''
+    if 'log3' in g:
+        # the gamut is in the primaries when stated, and in the gamma's own
+        # "-cine" suffix otherwise, which is how the Cinema Line bodies write it
+        gamut = XML_GAMUT.get(p) or ('S-Gamut3.Cine' if 'cine' in g else 'S-Gamut3')
+        return gamut + '/S-Log3'
+    if 'log2' in g:
+        return 'S-Gamut/S-Log2'      # Catalyst assumes S-Gamut for these two as well
+    if g.replace('-', '').startswith('slog'):
+        return 'S-Gamut/S-Log'
+    return ''
+
+
+def _color_space(gamma, primaries, xml_gamma=None, xml_primaries=None):
     if gamma and '/' in gamma:
         return gamma
     if gamma in ('S-Log2', 'S-Log') and not primaries:
         return 'S-Gamut/' + gamma  # not recorded; Catalyst assumes S-Gamut too
     if gamma and primaries:
         return '%s/%s' % (primaries, gamma)
-    return gamma or primaries or ''
+    return gamma or primaries or _color_space_from_xml(xml_gamma, xml_primaries) or ''
 
 
 def _sample_indices(n, fps, interval, max_samples):
@@ -206,20 +234,26 @@ def _read_mxf(f, out, interval, max_samples):
     if m:
         meta['audio_codec'] = 'Linear PCM'
         meta['audio_bits'] = int(m.group(1))
-    first = mxf.find_rtmd(f, 0)
+    secs = meta.get('duration_s') or 0
+    n_windows = min(max(0, int(secs / max(interval, 1.0))), max_samples, 12)
+    spots = [int(f.size * w / (n_windows + 1)) for w in range(1, n_windows + 1)]
+    # Look where the file says its essence is, and if that fails keep looking at the
+    # places we were going to read anyway. Giving up after one blind window at byte 0
+    # is what left long clips with no acquisition metadata at all.
+    first, at, tried = mxf.find_acquisition(f, secs, extra=spots)
     if not first:
-        out['warnings'].append('Metadata di acquisizione non trovati nell\'MXF.')
+        out['warnings'].append('Metadata di acquisizione non trovati nell\'MXF '
+                               '(%d punti provati, %.1f MB letti).'
+                               % (len(tried), f.bytes_read / 1048576.0))
         return
     out['rtmd'] = rtmd.decode(first)
+    out['rtmd_at'] = at
     series = {k: [] for k in CHANGE_KEYS}
     vals = rtmd.values(out['rtmd'])
     for k in CHANGE_KEYS:
         if k in vals:
             series[k].append(vals[k])
-    secs = meta.get('duration_s') or 0
-    n_windows = min(max(0, int(secs / max(interval, 1.0))), max_samples, 12)
-    for w in range(1, n_windows + 1):
-        pos = int(f.size * w / (n_windows + 1))
+    for pos in spots:
         payload = mxf.find_rtmd(f, pos, 3 * 1024 * 1024)
         if payload:
             v = rtmd.values(rtmd.decode(payload[:PARTIAL_READ]))
@@ -272,7 +306,14 @@ def _normalise(out):
                                        meta.get('width') or meta.get('v_width'))
     gamma = meta.get('capture_gamma')
     prim = meta.get('color_primaries')
-    meta['color_space'] = _color_space(gamma, prim)
+    meta['color_space'] = _color_space(gamma, prim, meta.get('xml_gamma'),
+                                       meta.get('xml_primaries'))
+    if meta['color_space'] and not gamma:
+        # say where it came from: the acquisition values that travel with it in the
+        # RTMD are not there, so the node must not present defaults as if they were read
+        meta['color_space_from'] = 'xml'
+        out['warnings'].append('Profilo colore dedotto dall\'XML della clip: i valori di '
+                               'ripresa per-frame non sono stati trovati.')
     # plain gamma name (without gamut) for Resolve "Gamma Notes"
     cs = meta['color_space']
     if cs and '/' in cs:

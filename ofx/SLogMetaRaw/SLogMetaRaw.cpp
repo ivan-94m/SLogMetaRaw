@@ -216,6 +216,15 @@ static const char* kPythonBootstrap = "import runpy, sys; sys.path.insert(0, sys
                                       "runpy.run_module('slogmetaraw', run_name='__main__')";
 
 // Run slogmetaraw --cache in a Python child (pure file reading, no Resolve API calls).
+// Budgets for one read attempt, in seconds. This runs on the UI thread, so the
+// first attempt is deliberately short: on a local disk a clip is read well inside
+// two seconds and the panel never stalls. A TIMEOUT - and only a timeout - buys a
+// longer attempt, because a 97 minute 4K clip on an external drive is slow, not
+// broken. A clean failure (not a Sony file) is final on the first try: retrying it
+// three times would freeze the panel for half a minute to reach the same answer.
+static const int kReadBudgetSec[] = { 2, 8, 20 };
+static const int kReadAttempts = (int)(sizeof(kReadBudgetSec) / sizeof(kReadBudgetSec[0]));
+
 static bool runExtractor(const std::string& clipPath, std::string& error)
 {
     std::string python, lib;
@@ -223,28 +232,39 @@ static bool runExtractor(const std::string& clipPath, std::string& error)
     std::vector<char*> envp;
     if (!preparePython(python, lib, envStore, envp, error)) return false;
 
-    const char* argv[] = { python.c_str(), "-c", kPythonBootstrap, lib.c_str(), "--cache", clipPath.c_str(), nullptr };
-    posix_spawn_file_actions_t fa;
-    posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);
-    posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
-    pid_t pid;
-    int rc = posix_spawn(&pid, python.c_str(), &fa, nullptr, const_cast<char* const*>(argv), envp.data());
-    posix_spawn_file_actions_destroy(&fa);
-    if (rc != 0) { error = "avvio lettura metadata fallito"; return false; }
-    for (int waited = 0; waited < 160; ++waited) {  // up to 8 s: this runs on the UI thread
-        int status = 0;
-        pid_t r = waitpid(pid, &status, WNOHANG);
-        if (r == pid) {
-            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return true;
-            error = "lettura metadata non riuscita (file non Sony?)";
-            return false;
+    int spent = 0;
+    for (int attempt = 0; attempt < kReadAttempts; ++attempt) {
+        const char* argv[] = { python.c_str(), "-c", kPythonBootstrap, lib.c_str(),
+                               "--cache", clipPath.c_str(), nullptr };
+        posix_spawn_file_actions_t fa;
+        posix_spawn_file_actions_init(&fa);
+        posix_spawn_file_actions_addopen(&fa, 1, "/dev/null", O_WRONLY, 0);
+        posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
+        pid_t pid;
+        const int rc = posix_spawn(&pid, python.c_str(), &fa, nullptr,
+                                   const_cast<char* const*>(argv), envp.data());
+        posix_spawn_file_actions_destroy(&fa);
+        if (rc != 0) { error = "avvio lettura metadata fallito"; return false; }
+
+        const int ticks = kReadBudgetSec[attempt] * 20;   // 50 ms per tick
+        for (int waited = 0; waited < ticks; ++waited) {
+            int status = 0;
+            const pid_t r = waitpid(pid, &status, WNOHANG);
+            if (r == pid) {
+                if (WIFEXITED(status) && WEXITSTATUS(status) == 0) return true;
+                error = "lettura metadata non riuscita (file non Sony?)";
+                return false;     // it answered: a longer wait would not change it
+            }
+            usleep(50000);
         }
-        usleep(50000);
+        kill(pid, SIGKILL);
+        waitpid(pid, nullptr, 0);
+        spent += kReadBudgetSec[attempt];
     }
-    kill(pid, SIGKILL);
-    waitpid(pid, nullptr, 0);
-    error = "lettura metadata troppo lenta (disco lento o file su unita di rete?)";
+    char buf[192];
+    snprintf(buf, sizeof(buf), "lettura metadata troppo lenta: %d tentativi, %d s in tutto "
+             "(disco lento o file su unita di rete?)", kReadAttempts, spent);
+    error = buf;
     return false;
 }
 
@@ -313,6 +333,8 @@ struct ClipMeta
     double shotTemp = 5600.0, shotTint = 0.0, shotEI = 800.0;
     double shotTintRaw = 0.0;       // what the record said, before the range check
     bool shotTintClamped = false;
+    bool rtmdFound = true;          // per-frame acquisition metadata reached at all
+    std::string colorSpaceFrom;     // "rtmd" or "xml": where the profile came from
     int camSpace = -1, camGamma = -1;
     int levelRequired = -1;   // scale the capture gamma needs: -1 unknown, 0 video, 1 full
     int levelHost = -1;       // scale Resolve decoded the clip on ('Auto' -> -1)
@@ -377,6 +399,10 @@ static bool fillClipMeta(const std::string& text, ClipMeta& m)
     if (m.levelRequired < 0 || m.levelRequired > 1) m.levelRequired = -1;
     if (m.levelHost < 0 || m.levelHost > 1) m.levelHost = -1;
     m.colorSpace = j["color_space"];
+    // records written before this field existed always had the metadata, so the
+    // absence of the key means "found" and an old cache keeps behaving as it did
+    m.rtmdFound = j.count("rtmd_found") ? atoi(j["rtmd_found"].c_str()) != 0 : true;
+    m.colorSpaceFrom = j["color_space_from"];
     m.fields = j;
     // Everything below this line came out of a file. A record can be stale, hand
     // edited, or written by a release whose scaling was wrong, and a white point the
@@ -798,8 +824,18 @@ void SLogMetaRaw::syncMetadata(bool p_Force)
             snprintf(tintNote, sizeof(tintNote),
                      " · tint di ripresa %.2f fuori scala, limitato a %+.0f: controlla il valore "
                      "nel pannello Camera Raw di Resolve", meta.shotTintRaw, meta.shotTint);
-        setText(m_Status, status + (meta.wbEstimated ? " · Kelvin stimato (la camera non lo registra)" : "")
-                        + tintNote + note);
+        // A clip whose per-frame metadata we could not reach still develops - the
+        // profile is in the sidecar XML - but it has no as-shot values to develop
+        // from, and the panel has to say so rather than let 5600 K look like a
+        // reading. Tone and colour are unaffected; white balance and exposure are
+        // relative moves from a default.
+        const char* source = (!meta.rtmdFound || meta.colorSpaceFrom == "xml")
+            ? " · profilo dedotto dall'XML della clip: i valori di ripresa per-frame non "
+              "sono stati trovati, Bilanciamento ed Exposure partono dai default"
+            : "";
+        setText(m_Status, status + (meta.wbEstimated && meta.rtmdFound
+                                    ? " · Kelvin stimato (la camera non lo registra)" : "")
+                        + source + tintNote + note);
         if (!sameClip || p_Force) {
             m_WBMode->setValue(0);
             m_Temp->setValue(meta.shotTemp);

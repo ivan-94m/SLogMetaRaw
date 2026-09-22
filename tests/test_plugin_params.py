@@ -65,12 +65,26 @@ class PluginParams(unittest.TestCase):
 
     def test_reader_cannot_freeze_the_ui(self):
         """The metadata reader runs on the UI thread: bounded wait, no cloud downloads,
-        and one attempt per clip."""
+        and one clip attempted once.
+
+        The wait escalates rather than being a single number. The point is the FIRST
+        attempt: it is what a clip that reads normally costs, and it has to be short
+        enough that the panel does not stall. The later, longer attempts only happen
+        after a timeout, which means a long take on a slow drive - the case that used
+        to come back with no metadata at all. The declared cost of that: a file that
+        times out three times holds the panel for the sum of the budgets, which is
+        why the total is capped here too.
+        """
         self.assertIn('SF_DATALESS', self.src)
         self.assertIn('alreadyTried', self.src)
-        wait = re.search(r'for \(int waited = 0; waited < (\d+); \+\+waited\)', self.src)
-        self.assertIsNotNone(wait, 'watchdog del processo di lettura non trovato')
-        self.assertLessEqual(int(wait.group(1)) * 0.05, 10, 'attesa massima troppo lunga')
+        budgets = re.search(r'kReadBudgetSec\[\] = \{([^}]*)\}', self.src)
+        self.assertIsNotNone(budgets, 'budget del processo di lettura non trovato')
+        secs = [int(v) for v in budgets.group(1).replace(',', ' ').split()]
+        self.assertTrue(secs, 'nessun budget dichiarato')
+        self.assertLessEqual(secs[0], 3, 'il primo tentativo blocca il pannello troppo a lungo')
+        self.assertEqual(secs, sorted(secs), 'i budget devono crescere, non calare')
+        self.assertLessEqual(sum(secs), 30, 'attesa complessiva troppo lunga')
+        self.assertIn('kReadBudgetSec[attempt] * 20', self.src)   # 50 ms per tick
 
     def test_settings_version_is_saved(self):
         """Saved with every node, so a future release can recognise and convert old settings."""

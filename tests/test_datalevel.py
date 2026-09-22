@@ -153,11 +153,15 @@ class MxfPictureDescriptor(unittest.TestCase):
         self.assertEqual(mxf.find_picture_levels(self.File(b'\x00' * 400)), {})
 
     def test_reads_only_the_head_of_the_file(self):
+        """The picture descriptor lives in the header metadata, so this must never
+        walk the essence. It now takes two reads at offset 0 - one for the partition
+        pack, which says how much header metadata there is, and one for the metadata
+        itself - and the property worth guarding is that both stay at the head."""
         f = self.File(b'\x00' * 400)
         with mock.patch.object(self.File, 'read_at', autospec=True,
                                side_effect=lambda s, p, n: s.data[p:p + n]) as read:
             mxf.find_picture_levels(f)
-        self.assertEqual([c.args[1] for c in read.call_args_list], [0])
+        self.assertEqual(set(c.args[1] for c in read.call_args_list), {0})
 
 
 class Decide(unittest.TestCase):

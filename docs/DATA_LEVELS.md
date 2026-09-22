@@ -138,7 +138,16 @@ dal data level.
 | MP4 + H.264/HEVC | VUI `video_full_range_flag` (+ primaries/transfer/matrix) | Sì, scrive la VUI. Tutti i dump pubblicati che ho trovato di clip **non log** riportano `tv` (limited). Il campione FX30 S-Log3 di questo progetto riporta invece full (`tests/test_samples.py`). **Non ho trovato un solo dump pubblicato di una clip S-Log consumer**: la tesi "i file interni Sony flaggano full range", ripetuta ovunque, non è mai sostanziata con un nome di campo o un dump. |
 | MP4 | box `colr` / `nclx`, bit full_range | Non verificato. Il parser del progetto lo legge comunque. |
 | MXF | descrittore CDCI: `0x3304` Black Ref, `0x3305` White Ref, `0x3306` Color Range, `0x3301` Component Depth | Quasi certamente sì. 10 bit: `0/1023/1024` = full, `64/940/897` = video (è la regola di `mxf_get_color_range` di ffmpeg). **Non ho trovato nessun dump pubblicato dei valori che Sony ci scrive**: MediaInfo non li riporta di default (feature request #532, aperta dal 2018). |
-| NRT XML (`*M01.XML`) | — | **Non esiste alcun elemento di range.** Ho cercato `LuminanceCodeRange` specificamente: non compare in nessuno schema Sony, tabella ExifTool o parser. L'XML dichiara la *gamma* (`CaptureGammaEquation`), non la scala. |
+| NRT XML (`*M01.XML`) | — | **Non esiste alcun elemento di range.** Ho cercato `LuminanceCodeRange` specificamente: non compare in nessuno schema Sony, tabella ExifTool o parser. L'XML dichiara la *gamma* (`CaptureGammaEquation`), non la scala. Da quella gamma si deduce la scala, ed è l'unica strada quando l'RTMD non si raggiunge — vedi la nota qui sotto sull'ortografia. |
+
+> **L'ortografia dell'XML non è quella dell'RTMD.** L'RTMD scrive
+> `S-Gamut3.Cine/S-Log3`; l'XML scrive `s-log3-cine`, minuscolo e con i
+> trattini. `FULL_SCALE_XML_GAMMAS` era un confronto esatto e `s-log3-cine`
+> non c'era, così una clip S-Log3 vista solo dall'XML veniva classificata
+> **Video** — il contrario di quello che la tabella di questo stesso modulo
+> dichiara. Ora `gamma_scale` applica al nome dell'XML la stessa clausola
+> permissiva che già applicava al nome RTMD: qualunque cosa cominci per
+> `s-log`, comunque scritta, è full scale.
 | RTMD per-frame | `0x8120` Luminance code range | Sì, ed è la dichiarazione Sony più autorevole che esista per clip. L'unico valore confermato contro Catalyst Browse è `2 = Full Scaled Code` (FX6, FX30). Nessun valore "legal" è mai stato osservato. |
 
 **Conclusione**: l'unico posto dove un file Sony dichiara esplicitamente la scala è il flag

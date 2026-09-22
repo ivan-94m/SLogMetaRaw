@@ -14,7 +14,7 @@ import unicodedata
 from . import camera, datalevel, resolve_io
 
 CACHE_DIR = os.path.expanduser('~/Library/Application Support/SLogMetaRaw/cache')
-VERSION = 3   # 3 adds the data-level fields (level_*)
+VERSION = 4   # 4 adds rtmd_found and color_space_from
 
 
 def fnv1a64(text):
@@ -58,8 +58,13 @@ def build_record(r):
     exposure = _join('ISO %s' % iso if iso else '',
                      'EI %s' % m['exposure_index'] if m.get('exposure_index') and m.get('exposure_index') != iso else '',
                      'gain %s' % d['master_gain_db'] if m.get('master_gain_db') else '')
-    wb = _join('%dK' % k + (' stimato' if estimated else ''), 'Tint %g' % tint,
-               m.get('awb_mode'), m.get('lighting_preset'))
+    # "5600K stimato" reads like a measurement. It is one when the camera simply did
+    # not record a Kelvin and we fell back to its lighting preset; it is not one when
+    # the per-frame metadata was never found at all, and the two were indistinguishable.
+    rtmd_found = 1 if r.get('rtmd') else 0
+    wb = ('valori di ripresa non disponibili' if not rtmd_found else
+          _join('%dK' % k + (' stimato' if estimated else ''), 'Tint %g' % tint,
+                m.get('awb_mode'), m.get('lighting_preset')))
     fps = m.get('capture_fps') or ''
     if m.get('sq'):
         fps = 'S&Q %gp -> %sp' % (m.get('capture_fps_value') or 0, ('%g' % m['fps']) if m.get('fps') else '?')
@@ -80,6 +85,10 @@ def build_record(r):
         'shot_tint': tint,
         'shot_ei': ei,
         'wb_estimated': 1 if estimated else 0,
+        'rtmd_found': rtmd_found,
+        # 'xml' when the profile came from the clip's sidecar rather than the RTMD:
+        # the node can develop, but it has no as-shot values to develop from
+        'color_space_from': m.get('color_space_from') or ('rtmd' if rtmd_found else ''),
         'cam_space': camera.SPACE_CODE.get(cam_gamut, -1),
         'cam_gamma': camera.GAMMA_CODE.get(cam_gamma, -1),
         'model': m.get('model') or '',

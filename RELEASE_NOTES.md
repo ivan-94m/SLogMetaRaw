@@ -162,12 +162,83 @@ L'esponente del ginocchio passa da 3 a **2,5**: a 3 tutto quello sopra +3 stop f
 in una banda di 0,139 stop, cioè alte luci piatte. A 2,5 ne restano 0,195, per uno
 spostamento del grigio di 0,008 stop — lo 0,55% di un valore.
 
+### Clip lunghe: i metadata di acquisizione non venivano trovati
+
+Segnalato su una clip FX6 di **1h 37m** in 4K: nel nodo tutti i cursori grigi,
+Focale, Diaframma, Fuoco, Shutter e ISO/EI a `—`, Bilanciamento `5600K stimato`, e
+il campo Colore senza il nome del profilo. Nel Media Pool, invece, i metadata si
+vedevano.
+
+**Si cercava in una finestra fissa di 4 MiB dall'inizio del file, e poi si
+rinunciava.** L'elemento ANC che porta i dati Sony è il *Data item* del content
+package, quindi sta dopo i metadata di header, dopo l'eventuale index table e dopo
+il primo elemento immagine — che in 4K long-GOP è l'I-frame di ancoraggio del GOP.
+E l'index table cresce con la durata: 97 minuti a 25p fanno circa 145.800 voci, che
+da sole spingono la prima essenza oltre i 4 MiB. Non trovandola, il lettore usciva
+subito, **saltando le altre dodici finestre che stava già per leggere**.
+
+Adesso il file lo si chiede al file. Un MXF dichiara nei suoi partition pack quanti
+byte di metadata di header e di indice stanno davanti all'essenza, e nel Random
+Index Pack in coda elenca l'offset di ogni partizione: sono poche centinaia di byte
+di lettura e danno l'offset esatto invece di una scommessa. Se anche quello non
+basta, si provano tutte le partizioni e poi le finestre sparse nel file, e solo
+allora si rinuncia — dicendo quanti punti sono stati provati e quanti byte letti.
+Tutti quei campi sono a 64 bit, quindi non c'è alcun limite ai 4 GB.
+
+Corretti nello stesso giro altri due modi di mollare: un elemento ANC **a cavallo**
+del bordo della finestra ora viene completato invece di essere scartato in silenzio,
+e un elemento ANC che non è di Sony — un timecode, per dire — non interrompe più la
+ricerca. La finestra, infine, si dimensiona sul bitrate della clip invece di essere
+4 MiB fissi.
+
+### Il profilo sopravvive nel sidecar XML
+
+Su quella clip l'XML `*M01.XML` c'era e si leggeva benissimo — è da lì che
+arrivavano obiettivo, LUT e frame rate. Conteneva anche `CaptureGammaEquation`, cioè
+il profilo di ripresa, che veniva **letto e poi buttato via**: `color_space` si
+costruiva solo dall'RTMD. Un `color_space` vuoto fa sollevare `NotSupported`, che
+mette `supported = 0`, che spegne tutti e dodici i cursori.
+
+Ora, quando l'RTMD non c'è, il profilo si ricava dall'XML. Il nodo **si accende** e
+tono, contrasto e colore lavorano pieni. Bilanciamento ed Exposure restano mosse
+relative a partire dai default, e il campo *Stato* lo dice a chiare lettere invece
+di lasciar credere che 5600 K sia un dato letto. Anche il campo Bilanciamento
+smette di scrivere `5600K stimato` quando i valori di ripresa non sono stati
+trovati affatto: erano due situazioni diverse che dicevano la stessa cosa.
+
+La conversione è conservativa: `s-log3-cine` → `S-Gamut3.Cine/S-Log3`,
+`s-log3` + `s-gamut3` → `S-Gamut3/S-Log3`, e un profilo non logaritmico resta tale,
+così una clip Rec.709 continua a lasciare il nodo neutro.
+
+### Data level: un S-Log3 visto dall'XML non è più «Video»
+
+`FULL_SCALE_XML_GAMMAS` confrontava per uguaglianza esatta, ma le Cinema Line
+scrivono `s-log3-cine`, che nel set non c'era: si finiva su **Video**, il contrario
+di quello che la tabella dello stesso modulo dichiara per l'S-Log3. Ora al nome
+dell'XML si applica la stessa clausola permissiva del nome RTMD.
+
+### La lettura non blocca più il pannello, e insiste di più quando serve
+
+Il lettore gira sul thread interfaccia di Resolve e aveva un solo tentativo da 8
+secondi. Ora i tentativi sono tre, con budget crescenti: **2, 8 e 20 secondi**. Il
+primo copre il caso normale su disco locale senza che il pannello si senta; i
+successivi scattano **solo** dopo un timeout, che è il caso della presa lunga su
+unità esterna. Un fallimento pulito — un file che non è Sony — resta definitivo al
+primo colpo: riprovarlo tre volte bloccherebbe il pannello mezzo minuto per
+arrivare alla stessa risposta.
+
 ### Verifica
 
-- **225 test**, tutti verdi.
+- **252 test**, tutti verdi.
 - Il C++ in float32 coincide con il riferimento Python in float64 su **tutta** la
   corsa di ogni controllo: il fuzz andava a metà scala, adesso va da estremo a
   estremo.
+- La clip che ha fatto emergere il difetto di scansione è di decine di gigabyte e non
+  esiste una copia. Quello che conta di lei è la sua **forma**, e
+  `tests/mxf_fixture.py` la scrive in pochi megabyte: partition pack, index table che
+  spinge l'essenza oltre i 4 MiB, elemento ANC Sony vero e Random Index Pack in coda.
+  Il payload decodifica esattamente i valori attesi — 5600 K, tint 15,17, EI 800,
+  ISO 12800, S-Gamut3.Cine/S-Log3 — quindi i test provano il parser, non un mock.
 - `docs/tone_curve.png` ha due strisce nuove: la stessa rampa blu attraverso il
   vecchio stadio — culmina a +2 stop e poi **scende** da 0,82 a 0,34 — e attraverso
   questo, monotona fino in cima.

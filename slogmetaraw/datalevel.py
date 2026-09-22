@@ -111,8 +111,16 @@ def gamma_scale(gamma, xml_gamma=None):
             return FULL
         if '/S-Log' in gamma or gamma.startswith('S-Log'):
             return FULL           # any future S-Log naming
-    if xml_gamma and str(xml_gamma).strip().lower() in FULL_SCALE_XML_GAMMAS:
-        return FULL
+    x = str(xml_gamma or '').strip().lower().replace('_', '-')
+    if x:
+        if x in FULL_SCALE_XML_GAMMAS:
+            return FULL
+        # The same permissiveness the RTMD name gets above. Sony's Cinema Line
+        # bodies write "s-log3-cine" in the XML, which is not in the set, and the
+        # exact-match fallthrough then classified an S-Log3 clip as VIDEO - the
+        # wrong way round for a curve this module's own table lists as full scale.
+        if x.replace('-', '').startswith('slog'):
+            return FULL
     if gamma or xml_gamma:
         return VIDEO
     return None
