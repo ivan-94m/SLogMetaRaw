@@ -5,7 +5,7 @@ Usage: python3 tools/make_falsecolor_chart.py [output png]
        (default: docs/falsecolor_bands.png)
 
 Each strip is produced by the same code the node runs (tests/develop_model.py, the
-reference for ofx/SLogMetaRaw/DevelopMath.h), on a neutral surface pushed off by a
+reference for ofx/SLogMetaRaw/math/FalseColor.h), on a neutral surface pushed off by a
 known amount, so the chart cannot drift away from what the plugin actually does:
 
   exposure     a ramp from -8 to +6 stops around 18% grey

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Draws the S-Log MetaRaw icons (installer, disk image, SLogMetaRaw OpenFX effect).
 // Usage: swift tools/make_icons.swift <output dir>
-// Writes icon_1024.png (app/installer icon) and effect_256.png (OpenFX effect icon).
+// Writes icon_1024.png (app/installer icon), effect_256.png and detail_256.png (OpenFX node icons).
 import AppKit
 
 func color(_ hex: UInt32, _ alpha: CGFloat = 1) -> NSColor {
@@ -188,9 +188,42 @@ func drawIcon(size s: CGFloat) -> NSBitmapImageRep {
     return rep
 }
 
+// The Detail node: the same tile with a badge of stacked ripples (local contrast, texture).
+func drawDetailIcon(size s: CGFloat) -> NSBitmapImageRep {
+    let base = drawIcon(size: s)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: base)
+    let r = s * 0.2, c = CGPoint(x: s * 0.76, y: s * 0.24)
+    let badge = NSBezierPath(ovalIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
+    color(0x15171C).setFill()
+    badge.fill()
+    color(0xFFFFFF, 0.85).setStroke()
+    badge.lineWidth = s * 0.012
+    badge.stroke()
+    for (i, a) in [0.45, 0.75, 1.0].enumerated() {
+        let y0 = c.y - r * 0.45 + CGFloat(i) * r * 0.45
+        let wave = NSBezierPath()
+        wave.lineWidth = s * 0.016
+        wave.lineCapStyle = .round
+        var x = c.x - r * 0.62
+        wave.move(to: CGPoint(x: x, y: y0))
+        while x <= c.x + r * 0.62 {
+            let phase = (x - (c.x - r * 0.62)) / (r * 1.24) * 2 * .pi * 2
+            wave.line(to: CGPoint(x: x, y: y0 + sin(phase) * r * 0.12 * CGFloat(a)))
+            x += s * 0.004
+        }
+        color(0xFFB347, CGFloat(a)).setStroke()
+        wave.stroke()
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    return base
+}
+
 let out = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "."
 try! drawIcon(size: 1024).representation(using: .png, properties: [:])!
     .write(to: URL(fileURLWithPath: out + "/icon_1024.png"))
 try! drawIcon(size: 256).representation(using: .png, properties: [:])!
     .write(to: URL(fileURLWithPath: out + "/effect_256.png"))
+try! drawDetailIcon(size: 256).representation(using: .png, properties: [:])!
+    .write(to: URL(fileURLWithPath: out + "/detail_256.png"))
 print("icons written to \(out)")
