@@ -1,322 +1,203 @@
-# Spalla, piede e colore: come sono fatti Highlights e Shadows
+# Toni: esposizione per zone, in stop
 
-Ricerca alla base dello stadio `sm_tone` di `DevelopMath.h`. Le misure vengono dai
-LUT installati su questa macchina; le formule di riferimento dal codice sorgente di
-OpenDRT, dalla documentazione ACES 2.0 e dal sorgente di darktable. Dove non sono
-riuscito a stabilire qualcosa, è scritto in fondo.
+Come funzionano i controlli **Toni** e **Zone** del nodo S-Log MetaRaw dalla versione 2.0, e
+perché sono fatti così. Il recupero locale, che conserva la texture, sta nel nodo separato
+**S-Log MetaRaw Detail**: vedi [DETAIL.md](DETAIL.md).
 
 ![Le curve a confronto](tone_curve.png)
 
+*Dall'alto: nessun tono; Highlights −100 (la spalla: il massimo registrato arriva sul Bianco);
+Highlights −100 con Soft Clip; Shadows +100 con Blacks −67; Contrast +50; stampa Kodak 2383;
+incarnato e cielo che salgono di 5 e 6 stop con Highlights −100. Tutte le strisce sono calcolate
+dal modello di riferimento del plugin (`tests/model/tone.py`).*
+
 ---
 
-## 1 · Cosa c'era prima, misurato
+## 1 · L'idea
 
-L'operatore precedente era un **gradino, non una spalla**:
+Esposizione e bilanciamento del nodo sono **guadagni in luce lineare di scena**. I Toni ne
+sono l'estensione naturale: **un'esposizione per zona, misurata in stop dal grigio 18%**, più
+una **spalla filmica** per le alte luci (Highlights).
 
-```
-ev_out = ev + highlights · 2 · clamp(ev/5, 0, 1)²
-```
+- Dentro una zona la pendenza è 1: la zona si sposta tutta insieme, come con un'esposizione,
+  e la texture resta intatta.
+- La compressione avviene solo nella **banda di transizione** fra una zona e l'altra, di
+  larghezza dichiarata.
+- Ogni pixel riceve **un solo guadagno scalare**, calcolato da una norma dei suoi tre canali:
+  la cromaticità non cambia, il nero assoluto resta nero, il guadagno commuta con qualsiasi
+  cambio di gamut.
+- La curva in stop è una **composizione in ordine fisso** di mappe monotone, con pendenza fra
+  0,35 e 2 (fino a 2,86 nelle Zone). **Nessuna combinazione di cursori può solarizzare**, e
+  spostando un cursore nella stessa direzione nessun tono torna indietro.
+- Niente adattamento all'immagine: niente istogrammi né "auto". Darebbero flicker e non
+  avrebbero senso quando Resolve cuoce il nodo in un LUT.
 
-| ev in | pendenza | cosa succede |
+È l'approccio di Baselight Base Grade e della palette HDR di Resolve, con i nomi dei cursori
+di Camera Raw.
+
+### Il limite di un operatore puntuale, detto chiaramente
+
+In un operatore puntuale vale `∇ℓ_out = T′(ℓ) · ∇ℓ_in`: dove la curva comprime con pendenza
+0,35, **anche la texture scende a 0,35**. Per questo Highlights e Shadows di Lightroom, che
+sono locali, non si possono riprodurre qui. Questo nodo resta puntuale di proposito:
+**Generate LUT lo può esportare** e non può creare aloni. Il recupero che conserva la
+texture lo fa il nodo Detail, messo subito dopo.
+
+Il costo fisico, da tenere presente: alzare le ombre di 1,5 stop in modo puntuale richiede una
+transizione di circa 3 stop.
+
+---
+
+## 2 · Il pannello
+
+### Toni (aperto)
+
+| Cursore | Cosa fa | Scala |
 |---|---|---|
-| +1 | 0,840 | comprime |
-| +3 | 0,520 | comprime |
-| +4,9 | 0,216 | comprime molto |
-| **+5,0** | **salta a 1,000** | **smette del tutto** |
-| +8 | 1,000 | nessuna compressione, solo un offset fisso |
+| **Contrast** | `e + 4c · tanh((e − Pivot)/4)`, con `c = 2^(v/100) − 1`: pendenza ×2 al Pivot a +100, ×½ a −100, estremi limitati | −100…+100 |
+| **Highlights** | in negativo una spalla: la pendenza cala in modo continuo verso l'alto e a −100 il massimo registrato arriva sul Bianco; in positivo un'espansione con pendenza ≤ 1,5 | vedi §2b |
+| **Bianco (stop)** | dove Highlights −100 porta il massimo registrato, e il tetto di Soft Clip | 2,5 |
+| **Shadows** | esposizione dei toni sotto −1 stop; alza anche il nero, che si tiene con Blacks | 100 = 2 stop |
+| **Whites** | esposizione dei toni da +3,5 stop al clip, transizione di 1 stop | 100 = 1 stop |
+| **Blacks** | velo in luce lineare 5 stop sotto il grigio: −100 = nero giù di 3 stop, +100 = su di 1; grigio fermo | −100…+100 |
+| **Vibrance** | saturazione pesata sui colori meno saturi, con gli incarnati protetti (finestra di tinta a 33°) | −100…+100 |
+| **Saturation** | saturazione a luminanza invariata, uguale in ogni spazio colore del nodo | −100…+100 |
+| **Azzera toni** | riporta a zero i sette cursori; esposizione e bilanciamento non cambiano | — |
 
-Tre difetti, tutti misurati:
+Oltre metà corsa Shadows e Whites raggiungono la pendenza minima (0,35): da lì **la banda si
+allunga verso l'esterno** invece di schiacciarsi di più.
 
-1. **Sopra +5 stop la pendenza torna esattamente a 1.** Non è una spalla: abbassa il
-   tetto di 2 stop e continua a clippare, solo più tardi.
-2. **Salto di pendenza da 0,202 a 1,000 in un punto.** In un cielo i pixel che valgono
-   esattamente +5 stop formano una curva di livello, e attorno a una sorgente
-   luminosa quelle curve sono concentriche: **un anello**, che si legge come un alone
-   pur essendo l'operatore puntuale. È il difetto che più assomiglia al problema che
-   si voleva risolvere.
-3. **Recupera 0,9 stop.** Porta il clip di un Rec.709 da +2,47 a +3,40 stop sopra il
-   grigio. Una S-Log3 ne porta ~6: se ne buttavano via 3,5.
+### 2b · Highlights: la spalla
 
-Inoltre il guadagno era applicato uguale a X, Y e Z, quindi la cromaticità era
-conservata **esattamente**: le alte luci recuperate restavano alla saturazione di
-scena (neon) e le ombre alzate si portavano dietro tutto il rumore croma.
+Fino alla 2.0 di prova Highlights era una zona come le altre: spostava di 2 stop tutto quello che
+stava sopra +2 stop, con pendenza 1. Il massimo registrato scendeva da +6 a +4 stop, ancora sopra
+il bianco di un Rec.709 (+2,47): le luci più forti restavano bruciate e quelle sotto diventavano
+lastre grigie, con tutto il loro contrasto. Non è così che la pellicola, ACES 2.0 o AgX guadagnano
+gamma dinamica.
 
----
+Ora è una spalla. Con `u = t − 0` (t dopo il Contrast, 0 = grigio) e `ψ` il raccordo C² di
+larghezza 2 stop delle zone:
 
-## 2 · L'alone: chi lo fa davvero
+```
+D(u) = [sp(1,4 (ψ(u) − 0,9)) − sp(−1,26)] / 1,4        sp(y) = log2(1 + 2^y)
+T(t) = t + E · D(u)
+```
 
-Il controllo Highlights del pannello Camera Raw di Resolve è **quasi certamente
-puntuale**, non spaziale. La prova documentale: il manuale afferma che le regolazioni
-della palette Primaries si possono cuocere in un LUT 3D (Resolve 21.1, p. 3484 e
-p. 310), e un LUT 3D è per definizione una mappa puntuale. Non c'è raggio, né soglia,
-né riferimento ai pixel vicini — a differenza di Photoshop e Lightroom, che espongono
-un `Radius` ed è lì che gli aloni nascono davvero.
+- `D′` sale da 0 a 1 senza mai tornare indietro: in negativo la pendenza di `T` cala in modo
+  continuo da 1 verso il basso, e non risale mai. Grigio e toni sotto non si muovono.
+- **Atterraggio.** A −100 il massimo che la camera registra, `6 + log2(EI scelto / EI di ripresa)`
+  stop sopra il grigio (il clip del sensore misurato su FX30, FX6, a7S III, a6300: +6,06…+6,17),
+  arriva esattamente sul **Bianco**. Il nodo risolve `E` in doppia precisione: niente velo grigio,
+  niente clip.
+- **Almeno 1,5 stop.** Se il Bianco è più alto del massimo meno 1,5 stop (un Bianco da DRT a 5–7, o
+  un EI abbassato), −100 porta comunque il massimo 1,5 stop più giù: Highlights non si spegne mai.
+- **Con Soft Clip acceso** la spalla lascia spazio al tetto: il massimo finisce un decimo di stop
+  sotto il Bianco invece di un terzo.
+- **Pendenza minima 0,06**, come ACES 2.0 e AgX a +6 stop. Se il Bianco è troppo basso per far
+  entrare tutto (Bianco sotto circa 2,3 senza Contrast, EI raddoppiato, Contrast oltre +20),
+  il massimo si ferma pochi centesimi di stop sopra.
+- **Il cursore** è addolcito, `a(1,5 − 0,5a)`. Scena che arriva sul Bianco:
 
-E un operatore puntuale monotono **non può** fare un alone. Con `out = f(in)` e
-`f' ≥ 0` si ha `grad out = f'(in) · grad in`: il gradiente conserva il segno pixel per
-pixel, non nascono estremi locali, non c'è inversione. È una dimostrazione, non
-un'opinione.
+| Highlights | −10 | −25 | −50 | −75 | −100 |
+|---|---|---|---|---|---|
+| valore di scena che arriva sul bianco | +2,59 | +2,81 | +3,28 | +4,08 | +6,0 |
 
-Allora da dove viene il bagliore? Il controllo non lo crea: **lo smaschera**.
+- **La pelle** a +1 stop si sposta di 0,008 / 0,035 / 0,055 stop a −10 / −50 / −100.
+- **In positivo**: `E = +0,5a`, pendenza fino a 1,5: più stacco, mai solarizzazione.
+- **Colore.** Dove la spalla comprime, i colori vanno verso il bianco: croma `× 2^(0,12 · d)`
+  (d = quanto la spalla ha abbassato, in stop), **in Oklab, a tinta e chiarezza costanti**: una
+  linea retta in luce lineare piegherebbe l'arancio verso il salmone e il blu verso il lavanda. In
+  più, i canali del gamut di uscita (Rec.709 se il nodo non converte) restano sotto il punto dove
+  il massimo arriva davvero. Le luci al neon restano neon, con il nucleo che schiarisce.
+- **LED e neon oltre il locus.** S-Gamut3.Cine arriva oltre i colori reali, dove Oklab non vale (i
+  suoi coni diventano negativi): lì il percorso sfuma nella linea retta verso la norma, che non può
+  dare canali negativi, e in ogni caso non esce dal gamut che il nodo scrive.
+- **Con un DRT** (ACES, AgX, DaVinci) dopo il nodo, il DRT comprime a sua volta: alza il Bianco a
+  4–5, o le alte luci vengono compresse due volte e diventano grigie.
+- **Il costo**: è puntuale, quindi la texture dentro le alte luci si ammorbidisce come in
+  pellicola (a −100 un dettaglio a +4 stop tiene circa un sesto del suo contrasto). La texture la
+  tiene Local Highlights, nel nodo Detail.
+- Whites, le Zone e Soft Clip vengono **dopo** la spalla, con i bordi riportati attraverso di essa:
+  Whites sposta ancora il massimo, ma a −100 ha poco spazio (−0,21 / +0,32 stop).
 
-1. **Velo dell'obiettivo.** Attorno a una finestra bruciata c'è una rampa luminosa
-   reale, che si estende per decine di pixel. Finché la zona è clippata la rampa è
-   schiacciata contro il soffitto e invisibile. Recuperi le alte luci e la rampa torna
-   visibile — c'era già.
-2. **Ringing del codec.** XAVC-I è DCT: ai bordi ad alto contrasto lascia un
-   sovraelongamento chiaro e uno scuro (mosquito noise). Stesso smascheramento. Più il
-   4:2:2, che porta la crominanza dal lato sbagliato del bordo.
-3. **Camera Raw → Sharpness ha default 20, non 0** su Sony, Canon e CinemaDNG
-   (manuale p. 189, p. 174). È uno sharpener spaziale che gira al debayer, **nello
-   stesso pannello**. Genera over/undershoot ai bordi; poi Highlights abbassa il lato
-   chiaro e rende più visibile l'undershoot scuro sul lato scuro.
-4. **Mid/Detail è locale** ed è a tre campi di distanza nella stessa riga numerica.
-   Blackmagic chiama il suo fratello maggiore Contrast Pop *"localized contrast
-   adjustment"* con un *"Detail size"* (p. 3546). Facilissimo attribuirne l'alone a
-   Highlights.
+### Zone (chiuso)
 
-**Se il bagliore ti dà fastidio, prova in quest'ordine**: Sharpness a 0, Mid/Detail a
-0, e poi guarda il bordo al 100% *prima* di qualsiasi correzione, con una riduzione di
-guadagno temporanea che scopra il cielo. Se la frangia è già lì, nessun tone mapper la
-toglierà: è nel file.
+Quattro zone come nella palette HDR di Resolve, ciascuna con **Exp** (stop), **Sat**, **Range**
+(bordo in stop dal grigio) e **Falloff** (larghezza della transizione in stop):
 
-Cosa può fare questo stadio: **non aggiungerne**, ed essere abbastanza graduale da non
-trasformare la rampa rivelata in un bordo. Il vecchio operatore faceva l'opposto.
-
----
-
-## 3 · I riferimenti, misurati
-
-Dai LUT che Resolve installa, non da manuali.
-
-**Kodak 2383** (`Film Looks/Rec709 Kodak 2383 D65.cube`, ingresso Cineon dichiarato
-nell'header) e **Blackmagic Gen 5** (`Blackmagic Gen 5 Film to Video.cube`):
-
-| pendenza a | grigio | +1 | +2 | +3 | +4 | +6 |
-|---|---|---|---|---|---|---|
-| Kodak 2383 | 1,60 | 1,13 | 0,69 | 0,31 | 0,14 | 0,014 |
-| BMD Gen 5 | 1,27 | 0,93 | 0,74 | 0,60 | 0,34 | 0,051 |
-
-Il grigio 18% finisce a 45,6 IRE sulla stampa e a ~41 IRE su Gen 5. Entrambe
-asintotano: Kodak verso +6,5 stop, Gen 5 verso +7.
-
-### La desaturazione della pellicola non è un termine separato
-
-Applicando la stessa curva neutra **per canale** ho riprodotto i numeri di
-saturazione del 2383 quasi esatti:
-
-| campione | +2 | +3 | +4 |
+| Zona | Agisce | Range | Falloff |
 |---|---|---|---|
-| cielo blu, pellicola | 0,710 | 0,468 | 0,257 |
-| cielo blu, per canale | 0,708 | 0,480 | 0,248 |
+| Black | sotto il bordo | −4 | 1 |
+| Shadow | sotto il bordo | +1 | 2 |
+| Light | sopra il bordo | −1 | 2 |
+| Specular | sopra il bordo | +4 | 1 |
 
-È la conseguenza del fatto che i tre canali asintotano allo stesso soffitto: salendo
-convergono, e convergere *è* desaturare. La pellicola non "desatura le alte luci",
-ha tre strati che saturano insieme.
+- **Contrast Pivot**: il tono attorno a cui ruota Contrast.
+- **False color: zone**: colora ogni pixel con la zona che lo muove, misurata sulla stessa
+  grandezza che le zone leggono (la norma dopo Blacks). Dove due zone si sovrappongono le tinte
+  si mescolano.
+- **Soft Clip** e **Color**: ripiega le alte luci verso un tetto, al livello del **Bianco** (nei
+  Toni), che non raggiungono mai. È *contenimento*, non recupero; con Highlights −100 il massimo
+  si ferma circa un terzo di stop sotto il Bianco.
+  Con Color a sinistra le luci ripiegate vanno verso il bianco come la pellicola; a destra
+  tengono il loro colore.
+- **Azzera zone**.
 
-### Ma il per-canale schiaccia gli incarnati
-
-| campione | scena | per canale a +3 stop |
-|---|---|---|
-| incarnato | 0,466 | **0,122** |
-| fogliame (mezzitoni) | 0,667 | **0,876** (sovrasatura) |
-
-Il per-canale lega la perdita di croma alla **distanza fra i canali**: un colore
-saturo (cielo) si comporta bene, un colore chiaro e poco saturo (incarnato) perde
-tutto. È letteralmente il piattone rosa. Per questo la via scelta è norma + purezza.
-
----
-
-## 4 · Come è fatto
-
-Tutto in **lineare di scena**, dopo esposizione e bilanciamento e prima dei trim di
-saturazione. Essendo dopo la decodifica log, è agnostico alla curva: S-Log, S-Log2 e
-S-Log3 passano tutti dallo stesso stadio.
-
-```
-norm  = power norm(R, G, B)
-t     = spalla(norm) / norm            rapporto di compressione, 1 = intatto
-rgb'  = rgb · t
-purezza p = t ^ k(t)
-rgb'' = y + (rgb' − y) · p
-```
-
-### La norma
-
-```
-norm(R,G,B) = (|R|³ + |G|³ + |B|³) / (R² + G² + B²)
-```
-
-È la *power norm* di darktable (il suo default). Proprietà che serve: `norm(x,x,x) = x`
-**esattamente**, così un pixel neutro resta neutro a qualsiasi impostazione.
-
-Perché non le alternative:
-
-| norma | cielo blu | problema |
-|---|---|---|
-| luminanza Y | 0,120 | sottostima i colori saturi: sfuggono alla compressione e bruciano |
-| max(RGB) | 0,300 | **cambia canale** dove uno clippa e un altro no. Una funzione puntuale di una quantità spazialmente discontinua produce frange — il manuale di darktable lo dice: *"may produce halos or fringes where channels are clipped"* |
-| power norm | 0,268 | prende i saturi come max, senza discontinuità |
-
-OpenDRT usa una scelta diversa e più elaborata (norma euclidea su RGB desaturato del
-35% verso pesi sbilanciati sul blu), ma la conclusione è la stessa: **né luminanza né
-max(RGB)**.
-
-### La spalla
-
-```
-spalla(L) = L / (1 + (L·a)^n)^(1/n)        a = |Highlights|, n = 3
-```
-
-È la stessa primitiva che darktable usa in AgX (`_sigmoid(x, power)`). Proprietà:
-
-- `f(0) = 0` e `f'(0) = 1` **esattamente**;
-- tende all'asintoto `1/a` senza **mai** raggiungerlo: nessun valore di scena, per
-  quanto alto, clippa;
-- **C^∞ per x > 0**, e alla giunzione con un tratto lineare la continuità dipende da n:
-  n=1 darebbe solo C¹, n<1 addirittura derivata seconda infinita, **n=3 dà C⁴**.
-  Niente giunzione, niente curvatura che salta, niente anello concentrico;
-- `a = 0` dà l'identità esatta senza bisogno di un ramo: il nodo resta neutro a zero.
-
-Con `a = 1` ripiega +6 stop dentro +2,47, cioè dentro il bianco di un Rec.709,
-spostando il grigio 18% di **0,003 stop** e un incarnato a +1 stop di 0,053.
-
-### Il piede
-
-```
-guadagno(ev) = 2^( Shadows · 1,5 · exp(−((ev + 4)/1,8)²) )
-```
-
-Una campana liscia in log2, centrata a −4 stop dove vive il dettaglio in ombra, che
-muore a entrambe le estremità:
-
-| a | campana | guadagno |
-|---|---|---|
-| grigio (0 stop) | 0,007 | 1,007 (+0,011 stop) |
-| −4 stop | 1,000 | 2,83 (+1,5 stop) |
-| −8 stop | 0,007 | 1,007 |
-| −10 stop | 0,000 | 1,000 |
-
-Essendo un **moltiplicatore**, `f(0) = 0` a qualsiasi impostazione: il nero assoluto
-resta nero. E il piede del nero, sotto −8 stop, non si muove — che è la richiesta.
-
-L'ampiezza è vincolata: sopra 2,10 stop la curva si ripiegherebbe e le ombre
-**solarizzerebbero**. 1,5 lascia margine; la pendenza minima misurata è 0,285.
-
-### Il colore
-
-Scalare tutti e tre i canali per lo stesso fattore **non cambia la saturazione**. Il
-commento nel sorgente di darktable lo dice bene: una curva che conserva i rapporti è
-*saturation-invariant*, quindi un'alta luce compressa mantiene tutto il suo colore e
-viene fuori come una macchia uniforme e piena senza gradazione interna. Una curva che
-conserva i rapporti **non brucia mai verso il bianco da sola**: la purezza va ridotta
-esplicitamente.
-
-```
-k(t) = 0,5 · (1 + 1,0 · max(1 − t, 0)) · 2^(−ColorRecovery)
-p    = t^k(t)          se t < 1, altrimenti 1
-```
-
-L'esponente **cresce dove la curva ha compresso di più** — è il meccanismo del
-*Purity Limit* di OpenDRT, dove `p = 1 + 4·(1 − tonescale)·(...)`. Serve perché una
-legge di potenza singola può centrare l'incarnato o l'estremo alto, non entrambi:
-
-| | incarnato +3 | cielo +6 |
-|---|---|---|
-| esponente fisso 0,8 | 0,297 ✓ | 0,285 (troppo colorato) |
-| **esponente crescente** | **0,305 ✓** | **0,115** |
-| pellicola | 0,154 | 0,056 |
-
-Il bersaglio concordato era ~0,30 sull'incarnato: più ricco della pellicola, che a
-0,154 dà proprio il piattone. Il cursore **Color Recovery** muove l'esponente: verso
-destra restituisce colore, verso sinistra va verso la pellicola.
-
-Il cursore non può mai **aggiungere** croma che il pixel non aveva: `p ≤ 1` sempre.
-È la stessa regola di darktable v7 (*"resaturation is allowed only where filmic
-desaturated"*).
-
-Verso destra toglie anche croma alle ombre aperte, proporzionalmente a quanto sono
-state alzate — dove sta il rumore cromatico.
+I bordi di Shadows, Whites e delle Zone sono **riportati attraverso il Contrast e la spalla di
+Highlights**: restano in stop di scena qualunque sia il Contrast o Highlights.
 
 ---
 
-## 5 · Dove questo sta rispetto allo stato dell'arte
+## 3 · Come è fatto (in breve)
 
-| | questo nodo | OpenDRT | ACES 2.0 | AgX |
-|---|---|---|---|---|
-| primitiva spalla | soft-clip n=3 | `(x/(x+s))^p` | Michaelis-Menten × toe quadratico | soft-clip, stessa famiglia |
-| `f(0) = 0` | **sì, esatto** | **no**, `tn_off = 0.005` alza il nero a ~5/255 | sì | sì (clamp) |
-| norma | power norm | euclidea su RGB desaturato | JMh (M) | per canale |
-| purezza | `t^k(t)`, k cresce | `1 − t^p`, p cresce | compressione di M in JMh | conseguenza del per-canale |
-| protezione incarnato | esponente crescente | finestra di tinta sull'arancio (`pt_lmh_r`) | nessuna — è nota per gli incarnati *"pasty pastel"* | nessuna |
+Tutto in luce lineare di scena, dopo Exposure e White Balance:
 
-Due cose che questo nodo fa **meglio** dei riferimenti: il nero è ancorato
-esattamente (OpenDRT di default no), e la spalla è C⁴ alla giunzione.
+1. **Norma** `N = Σ|c|³ / Σc²` in Rec.2020 fisso (la *power norm* di darktable): `N(x,x,x) = x`,
+   liscia, senza scambi di canale.
+2. **Blacks**: velo lineare a scala fissa, con la rinormalizzazione che tiene fermo il grigio.
+3. `e = log2(N/0,18)` con un pavimento morbido a −16 stop.
+4. **Contrast**, poi la **spalla di Highlights**, poi i **7 slot di zona** in ordine fisso:
+   Specular, Whites, Light verso l'alto (uno slot resta libero); Black, Shadows, Shadow verso il
+   basso. Ogni slot usa la legge ρ/ψ: raccordo C² di larghezza fissa più un limitatore di
+   pendenza.
+5. **Soft Clip**.
+6. Un solo guadagno `x′ = x · G`.
+7. **Verso il bianco**, solo dove la spalla comprime (vedi §2b).
+8. **Colore** attorno a `Y·D65` nel gamut d'uscita (Rec.2020 se il nodo non converte):
+   Saturation, Vibrance, Sat di zona, un limite morbido che impedisce canali negativi e, con
+   Soft Clip, la purezza e il limite dei canali sotto il tetto.
 
-Una che fa **peggio**: la protezione degli incarnati di OpenDRT è una finestra
-gaussiana di tinta centrata sull'arancio, più selettiva di un esponente che dipende
-solo dalla compressione. Qui non è implementata — richiederebbe un `atan2` per pixel
-e una tabella di tinta — e il bersaglio di 0,30 è raggiunto lo stesso, ma su un
-soggetto arancione molto saturo il comportamento sarà meno raffinato.
-
-### Un compromesso dichiarato
-
-Sopra +3 stop questa spalla comprime **più** di entrambi i riferimenti: fra +3 e +6
-stop tiene 0,14 stop di separazione contro i 0,26 del Kodak. È il prezzo di un
-ginocchio abbastanza netto da non toccare i mezzitoni (n=3 sposta il grigio di 0,003
-stop; n=2 lo sposterebbe di 0,023 e l'incarnato di 0,154). La priorità era esplicita:
-non incidere sui mezzitoni. Il test
-`test_above_three_stops_it_compresses_harder_than_film` registra il compromesso
-perché non venga scambiato per un difetto.
+Il modello di riferimento è `tests/model/tone.py`; il C++ e il Metal lo seguono entro 2e-4
+(test di parità su pannelli casuali, anche con Rosetta per la slice x86_64).
 
 ---
 
-## 6 · Cosa non sono riuscito a stabilire
+## 4 · Ricette
 
-1. **L'algoritmo vero di Resolve.** Blackmagic non ha mai pubblicato la funzione di
-   Highlights. Che sia puntuale è dedotto dall'affermazione sui LUT 3D, non da una
-   dichiarazione degli sviluppatori.
-2. **Nessuno l'ha mai misurato.** Ho cercato specificamente test con step wedge o bordo
-   netto su Highlights di Resolve: zero risultati, ovunque. È il buco di prove più
-   grosso. Il test che lo chiuderebbe: applicare solo Highlights, esportare un LUT 3D
-   a 65 punti, riapplicarlo e differenziare. Se il LUT riproduce l'effetto, è puntuale
-   — dimostrato, non dedotto.
-3. **Se la curva di Resolve sia monotona agli estremi.** Se a −100 si ripiegasse,
-   produrrebbe un bordo chiaro da sola, puntualmente. Nessuno ha pubblicato il grafico.
-4. **Il razionale scritto di Jed Smith sulla scelta della norma.** Ho il codice e la
-   documentazione dei parametri, non un passaggio in cui spiega perché l'euclidea su
-   RGB desaturato batta una norma di luminanza.
-5. **Una fonte pubblicata che dica "una giunzione solo C¹ produce contouring visibile
-   in una DRT".** Non sembra esistere. La letteratura sulle bande di Mach copre il caso
-   della derivata prima; il caso della derivata seconda per le curve di tono no.
-6. **Una curva pubblicata per la desaturazione delle ombre.** La tecnica è reale
-   (c'è letteratura brevettuale sul decadimento della crominanza per il rumore) ma
-   **le DRT moderne fanno l'opposto**: ACES 2.0 e OpenDRT *aumentano* deliberatamente
-   la croma nelle ombre per non avere mezzitoni slavati. Qui è su un cursore che parte
-   da zero, quindi è una scelta esplicita di chi corregge, non un default.
+- **Cielo o finestre che bruciano**: Highlights −50…−100 (con un DRT dopo, Bianco a 4–5). Per
+  la texture delle nuvole: Local Highlights nel nodo Detail.
+- **Controluce con viso in ombra**: Shadows +30…+60 e Blacks −20…−40 per tenere il nero.
+- **Look più "pellicola"**: Contrast +20…+30, Highlights −60.
+- **Sat delle ombre rumorose**: Zone › Shadow Sat −30…−50.
+- **Recupero dei riflessi speculari**: Zone › Specular Exp −1…−2.
+
+---
+
+## 5 · LUT
+
+Il nodo è puntuale, quindi Generate LUT lo include. Nei nodi del reticolo l'errore resta sotto
+3e-4; fra un nodo e l'altro conta l'interpolazione. **Con 65 punti** i cursori Camera Raw a ±100
+restano entro circa 3,5 code value S-Log3. Con 33 punti, nel piede lineare di S-Log3 (Shadows
++100) si arriva a circa 10 CV, e alcune Zone estreme (Black o Shadow +3) superano anche a 65
+punti: per quei grade conviene esportare a 65 punti o lasciare il nodo attivo.
 
 ---
 
 ## Fonti
 
-**Misurate in locale** · `Film Looks/Rec709 Kodak 2383 D65.cube` e
-`Blackmagic Design/Blackmagic Gen 5 Film to Video.cube` nella cartella LUT di Resolve ·
-`/Applications/DaVinci Resolve/DaVinci Resolve Manual.pdf` (21.1, 4351 pagine)
-
-**Codice e documentazione** ·
-[OpenDRT (Jed Smith)](https://github.com/jedypod/open-display-transform/blob/main/display-transforms/opendrt/OpenDRT.dctl) ·
-[parametri OpenDRT](https://github.com/jedypod/open-display-transform/blob/main/display-transforms/opendrt/docs/opendrt-parameters.md) ·
-[ACES 2.0 Chroma Compression](https://docs.acescentral.com/system-components/output-transforms/technical-details/chroma-compression/) ·
-[implementazione OCIO di ACES 2.0](https://github.com/AcademySoftwareFoundation/OpenColorIO/blob/main/src/OpenColorIO/ops/fixedfunction/ACES2/Transform.cpp) ·
-[darktable AgX](https://github.com/darktable-org/darktable/blob/master/src/iop/agx.c) ·
-[darktable filmic rgb](https://github.com/darktable-org/darktable/blob/master/src/iop/filmicrgb.c) ·
-[darktable, norme di crominanza](https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/filmic-rgb/) ·
-[darktable tone equalizer, aloni e guided filter](https://docs.darktable.org/usermanual/development/en/module-reference/processing-modules/tone-equalizer/) ·
-[Hable, curve filmiche a tratti](http://filmicworlds.com/blog/filmic-tonemapping-with-piecewise-power-curves/)
-
-**Meccanismo degli aloni** ·
-[He, Sun, Tang — Guided Image Filtering](https://pubmed.ncbi.nlm.nih.gov/23599054/) ·
-[Photoshop Shadows/Highlights, il parametro Radius](https://helpx.adobe.com/photoshop/using/adjust-shadow-highlight-detail.html) ·
-[veiling glare](https://en.wikipedia.org/wiki/Veiling_glare) ·
-[mosquito noise](https://en.wikipedia.org/wiki/Mosquito_noise) ·
-[bande di Mach](https://en.wikipedia.org/wiki/Mach_bands)
+Baselight Base Grade (FilmLight, Lowepost) · palette HDR e pannello Camera Raw del manuale di
+DaVinci Resolve 21.1 · darktable (power norm, tone equalizer, filmic rgb, sigmoid) · OpenDRT
+(purity limit, tonescale) · ACES 2.0 (tonescale di Michaelis–Menten, `Lib.Academy.Tonescale.ctl`) ·
+AgX (Sobotka; forma minima di Wrensch) · la stampa Kodak 2383 misurata dal LUT di Resolve · Paris,
+Hasinoff, Kautz, *Local Laplacian Filters* (2011) e il Lightroom Journal di Adobe (2012) sul perché
+Highlights e Shadows di Lightroom sono locali.

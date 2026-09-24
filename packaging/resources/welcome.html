@@ -4,12 +4,15 @@ h2{font-size:17px;margin:0 0 6px} li{margin:3px 0} .m{color:#666;font-size:12px}
 @media (prefers-color-scheme: dark){body{color:#e8e8ea}.m{color:#aaa}}
 </style></head><body>
 <h2>S-Log MetaRaw @VERSION@</h2>
-<p>Metadata Sony e controlli Camera Raw per DaVinci Resolve 21.</p>
+<p>Metadata Sony e controlli di sviluppo per DaVinci Resolve 21.</p>
 <ul>
-<li><b>Script S-Log MetaRaw</b>: legge i dati di ripresa dei file Sony e li registra in Resolve (Workspace › Scripts › S-Log MetaRaw).</li>
-<li><b>Plugin S-Log MetaRaw</b>: nodo per la pagina Color che si imposta da solo con ISO/EI, bilanciamento e colore della clip (OpenFX › S-Log MetaRaw). Corregge il <b>data level</b> quando Resolve legge la clip sulla scala sbagliata, sviluppa le alte luci con una <b>spalla filmica</b> che non clippa mai, e ha tre viste <b>false color</b> per piazzare esposizione e bilanciamento misurando.</li>
+<li><b>Script S-Log MetaRaw</b>: legge i dati di ripresa dei file Sony e li registra nel Media Pool (Workspace › Scripts › S-Log MetaRaw).</li>
+<li><b>Nodo S-Log MetaRaw</b>: si imposta da solo con EI, bilanciamento e colore della clip; toni per zone in stop, false color, correzione del data level (OpenFX › S-Log MetaRaw).</li>
+<li><b>Nodo S-Log MetaRaw Detail</b>, nuovo: recupero di luci e ombre per aree, Texture, Clarity, Dehaze.</li>
 </ul>
+<p><b>Aggiornando dalla 1.x</b> i toni dei nodi ripartono da zero: per conservare un grade finito, prima esporta un LUT con Generate LUT.</p>
 <p>Chiudi DaVinci Resolve prima di continuare. I file originali non vengono mai modificati.</p>
-<p class="m">Progetto hobbistico e indipendente, distribuito così com'è, senza garanzie. Testato su DaVinci Resolve Studio 21 su macOS.<br>
+<p class="m">Non è raw: la scienza colore fa comportare l'immagine in un modo che lo ricorda, ma non restituisce informazioni che il file non ha.
+Progetto hobbistico e indipendente, distribuito così com'è, senza garanzie. Testato su DaVinci Resolve Studio 21.1 su macOS.<br>
 Ivan Mazzone + Claude · github.com/ivan-94m · @ivan_94m · Non affiliato a Sony né a Blackmagic Design.</p>
 </body></html>

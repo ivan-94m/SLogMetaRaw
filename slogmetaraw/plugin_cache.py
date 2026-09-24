@@ -14,7 +14,9 @@ import unicodedata
 from . import camera, datalevel, resolve_io
 
 CACHE_DIR = os.path.expanduser('~/Library/Application Support/SLogMetaRaw/cache')
-VERSION = 3   # 3 adds the data-level fields (level_*)
+# 5: MXF read from the partition pack (long FX6 clips came out unsupported).
+# 6: FX6 tint in the camera's units (the file stores hundredths). The plugin re-reads older records.
+VERSION = 6
 
 
 def fnv1a64(text):
@@ -25,9 +27,36 @@ def fnv1a64(text):
     return '%016x' % h
 
 
+def canonical_path(clip_path):
+    """Return the one path spelling shared with the OpenFX plugin.
+
+    Resolve can expose the same file through a symlink while its scripting API
+    reports the physical path. Hashing those two spellings made the script and
+    node look in different cache files. NFC also handles decomposed macOS paths.
+    """
+    return unicodedata.normalize('NFC', os.path.realpath(os.path.expanduser(clip_path)))
+
+
 def cache_path(clip_path):
-    # macOS paths can arrive NFD or NFC: normalise to NFC so the plugin's FNV matches
-    return os.path.join(CACHE_DIR, fnv1a64(unicodedata.normalize('NFC', clip_path)) + '.json')
+    return os.path.join(CACHE_DIR, fnv1a64(canonical_path(clip_path)) + '.json')
+
+
+def resolve_status_path(clip_path):
+    """Outcome of the last "Rileggi metadata" write into Resolve (--to-resolve)."""
+    return os.path.join(CACHE_DIR, fnv1a64(canonical_path(clip_path)) + '.resolve.json')
+
+
+def _file_identity(clip_path):
+    """Return cheap fields that let the node reject a stale cache record.
+
+    Size plus nanosecond mtime avoids hashing multi-gigabyte XAVC media. Zeroes
+    preserve useful records made from synthetic inputs used by automated tests.
+    """
+    try:
+        st = os.stat(clip_path)
+    except OSError:
+        return 0, 0
+    return int(st.st_size), int(st.st_mtime_ns)
 
 
 LEVEL_CODE = {datalevel.VIDEO: 0, datalevel.FULL: 1}
@@ -68,13 +97,23 @@ def build_record(r):
               'master_gain_db': 'gain', 'white_balance_k': 'WB', 'tint': 'tint', 'nd_filter': 'ND',
               'awb_mode': 'modo WB'}
     changes = ', '.join(dict.fromkeys(labels.get(key, key) for key in (r.get('changes') or {})))
+    sampling = r.get('sampling') or {}
+    partial = 1 if sampling.get('partial') else 0
+    if partial and not changes:
+        changes = 'non verificato'
+
     stab = {'enabled': 'attivo', 'disabled': 'spento'}.get(m.get('image_stabilizer'), m.get('image_stabilizer'))
     model = m.get('model') or ''
     short = resolve_io._short_model(model)
 
+    canonical = canonical_path(r['path'])
+    file_size, file_mtime_ns = _file_identity(canonical)
     return {
         'version': VERSION,
-        'path': r['path'],
+        'path': canonical,
+        # Kept flat/numeric for the plugin's deliberately tiny JSON reader.
+        'file_size': file_size,
+        'file_mtime_ns': file_mtime_ns,
         'supported': supported,
         'shot_temp': k,
         'shot_tint': tint,
@@ -111,16 +150,37 @@ def build_record(r):
                          'stabilizzatore %s' % stab if stab else '') or '—',
         'lut': m.get('monitoring_descriptions') or m.get('lut_file') or '—',
         'file': _join(os.path.basename(r['path']), m.get('format_name'), 'SN %s' % m['serial'] if m.get('serial') else ''),
+        'samples_read': int(sampling.get('read') or 0),
+        'samples_planned': int(sampling.get('planned') or 0),
+        'partial': partial,
     }
 
 
-def write_cache(r):
+def _complete_record_at(path, rec):
+    """True when path holds a complete record of this version for the same file."""
+    try:
+        with open(path, encoding='utf-8') as fh:
+            old = json.load(fh)
+    except (OSError, ValueError):
+        return False
+    return (isinstance(old, dict) and old.get('version') == VERSION and old.get('partial') == 0
+            and all(old.get(k) == rec[k] for k in ('path', 'file_size', 'file_mtime_ns')))
+
+
+def write_cache(r, keep_complete=False):
+    """Write the plugin record; a partial record never replaces a complete one.
+
+    keep_complete: leave any complete record in place (the plugin's --cache mode).
+    """
+    rec = build_record(r)
     os.makedirs(CACHE_DIR, exist_ok=True)
-    path = cache_path(r['path'])
+    path = os.path.join(CACHE_DIR, fnv1a64(rec['path']) + '.json')
+    if (rec['partial'] or keep_complete) and _complete_record_at(path, rec):
+        return path
     tmp = path + '.tmp'
     try:
         with open(tmp, 'w', encoding='utf-8') as fh:
-            json.dump(build_record(r), fh, ensure_ascii=False)
+            json.dump(rec, fh, ensure_ascii=False)
         os.replace(tmp, path)  # atomic: the plugin never sees a half-written file
     except OSError:            # disk full or read-only: leave no half-written file behind
         try:

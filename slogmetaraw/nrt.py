@@ -18,6 +18,25 @@ def _findall(root, name):
     return [el for el in root.iter() if _local(el.tag) == name]
 
 
+# <Item name="CaptureGammaEquation"/"CaptureColorPrimaries"> values -> the rtmd names
+XML_LOG = {'s-log': 'S-Log', 's-log2': 'S-Log2', 's-log3': 'S-Log3', 's-log3-cine': 'S-Log3'}
+XML_GAMUT = {'s-gamut': 'S-Gamut', 's-gamut3': 'S-Gamut3', 's-gamut3-cine': 'S-Gamut3.Cine'}
+
+
+def capture_space(meta):
+    """(capture gamma, colour primaries) named as in the rtmd, from the parsed NRT items.
+
+    (None, None) for a curve that is not S-Log, or S-Log3 without a known gamut.
+    """
+    gamma = str(meta.get('xml_gamma') or '').strip().lower()
+    gamut = XML_GAMUT.get(str(meta.get('xml_primaries') or '').strip().lower())
+    log = XML_LOG.get(gamma)
+    if log == 'S-Log3':
+        gamut = gamut or ('S-Gamut3.Cine' if gamma == 's-log3-cine' else None)
+        return ('%s/S-Log3' % gamut, gamut) if gamut else (None, None)
+    return (log, gamut) if log else (None, None)
+
+
 def ltc_to_tc(value):
     """NRT LTC value 'FFSSMMHH' (BCD, with flag bits) -> 'HH:MM:SS:FF'."""
     if not value or len(value) != 8:

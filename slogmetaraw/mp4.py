@@ -2,31 +2,57 @@
 """Minimal ISO-BMFF (MP4/MOV) reader.
 
 Reads only box headers and the few boxes we need (moov, top-level meta,
-sample tables) via seek, so even multi-GB clips cost a few KB of I/O.
+sample tables), so even multi-GB clips cost a few KB of I/O.
 """
+import os
 import struct
 
-CONTAINERS = {b'moov', b'trak', b'mdia', b'minf', b'stbl', b'dinf', b'edts', b'udta'}
+MAX_BOXES = 4096               # per level: a non-ISO file must not become a long walk
+PRELOAD_MAX = 64 * 1024 * 1024
+META_PRELOAD = 64 * 1024
 
 
 class CountingFile:
-    """File wrapper that counts bytes actually read (used for perf checks)."""
+    """Positional reads that count system calls and bytes (the performance tests use both).
+
+    No read-ahead: a buffered file reads st_blksize (1 MiB on exFAT disks) for
+    every 2 KB sample. preload() keeps one explicit window in memory instead.
+    """
 
     def __init__(self, path):
-        self._f = open(path, 'rb')
+        self._fd = os.open(path, os.O_RDONLY)
+        try:
+            self.size = os.fstat(self._fd).st_size
+        except OSError:
+            os.close(self._fd)
+            raise
         self.bytes_read = 0
-        self._f.seek(0, 2)
-        self.size = self._f.tell()
-        self._f.seek(0)
+        self.reads = 0
+        self._base = 0
+        self._window = b''
 
-    def read_at(self, pos, n):
-        self._f.seek(pos)
-        data = self._f.read(n)
+    def _pread(self, pos, n):
+        n = max(0, min(n, self.size - pos))
+        if n == 0 or pos < 0:
+            return b''
+        data = os.pread(self._fd, n, pos)
+        self.reads += 1
         self.bytes_read += len(data)
         return data
 
+    def preload(self, pos, n):
+        rel = pos - self._base
+        if not (rel >= 0 and rel + min(n, self.size - pos) <= len(self._window)):
+            self._base, self._window = pos, self._pread(pos, n)
+
+    def read_at(self, pos, n):
+        rel = pos - self._base
+        if rel >= 0 and rel + n <= len(self._window):
+            return self._window[rel:rel + n]
+        return self._pread(pos, n)
+
     def close(self):
-        self._f.close()
+        os.close(self._fd)
 
     def __enter__(self):
         return self
@@ -38,7 +64,9 @@ class CountingFile:
 def iter_boxes(f, start, end):
     """Yield (type, box_start, header_len, box_size) for boxes in [start, end)."""
     pos = start
-    while pos + 8 <= end:
+    for _ in range(MAX_BOXES):
+        if pos + 8 > end:
+            return
         hdr = f.read_at(pos, 16)
         if len(hdr) < 8:
             return
@@ -146,7 +174,8 @@ def _parse_trak(f, trak):
                     tr.timescale, tr.duration = struct.unpack('>IQ', d[20:32])
                 else:
                     tr.timescale, tr.duration = struct.unpack('>II', d[12:20])
-            elif t == b'hdlr':
+            elif t == b'hdlr' and tr.handler is None:
+                # QuickTime repeats hdlr inside minf (data handler 'alis'): the media one comes first
                 tr.handler = f.read_at(bp + bhl + 8, 4)
             elif t == b'stbl':
                 for t2, p2, hl2, s2 in iter_boxes(f, bp + bhl, bp + bs):
@@ -167,20 +196,24 @@ class MP4:
         self.f = f
         self.tracks = []
         self.meta_xml = None          # NonRealTimeMeta XML (bytes)
-        self.meta_items = {}          # item name -> bytes (e.g. 'Look Control data')
+        self.items = {}               # item name -> (file offset, length), e.g. 'Look Control data'
         self.brand = None
         self._parse()
 
     def _parse(self):
         f = self.f
+        f.preload(0, META_PRELOAD)     # ftyp, uuid and free headers in one read
         for t, p, hl, s in iter_boxes(f, 0, f.size):
             if t == b'ftyp':
                 self.brand = f.read_at(p + hl, 4).decode('latin1')
             elif t == b'moov':
+                if s <= PRELOAD_MAX:
+                    f.preload(p, s + 16)   # + the next top-level header
                 for t2, p2, hl2, s2 in iter_boxes(f, p + hl, p + s):
                     if t2 == b'trak':
                         self.tracks.append(_parse_trak(f, (p2, hl2, s2)))
             elif t == b'meta':
+                f.preload(p, min(s, META_PRELOAD))
                 self._parse_meta(p + hl + 4, p + s)
 
     def _parse_meta(self, a, b):
@@ -246,9 +279,14 @@ class MP4:
         for item_id, (method, off, length) in locs.items():
             name = names.get(item_id, 'item%d' % item_id)
             if method == 1 and idat_start is not None:
-                self.meta_items[name] = f.read_at(idat_start + off, length)
+                self.items[name] = (idat_start + off, length)
             elif method == 0:
-                self.meta_items[name] = f.read_at(off, length)
+                self.items[name] = (off, length)
+
+    def item(self, name):
+        """Bytes of a meta item, read only on request (the LUT alone is ~434 KB)."""
+        loc = self.items.get(name)
+        return self.f.read_at(*loc) if loc else None
 
     def track(self, handler=None, codec=None):
         for t in self.tracks:

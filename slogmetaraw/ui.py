@@ -13,6 +13,7 @@ chunks on the timer itself, so every Resolve API call stays on the UI thread.
 import datetime
 import json
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -35,8 +36,13 @@ COLUMNS = ('Clip', 'Camera', 'Obiettivo', 'Focale', 'Diaframma', 'Shutter', 'ISO
 EXPORT_DIR = os.path.expanduser('~/Documents/SLogMetaRaw')
 TIMER_MS = 100     # UI refresh interval
 WATCHDOG_MS = 250  # interval of the window-close watchdog (2 ticks confirm)
-WRITE_CHUNK = 8    # SetMetadata calls per timer tick
-CLIP_TIMEOUT = 15  # seconds per clip: longer means the read hangs and the clip is skipped
+# RunLoop keeps the GIL between callbacks: without this pause the worker thread
+# advances one step per tick (21 clips took 30 s instead of 0.6 s).
+GIL_YIELD = 0.015
+WRITE_BUDGET = 0.07        # seconds of SetMetadata calls per timer tick
+CLIP_TIMEOUT_FIRST = 10    # seconds for the first clip of a volume: a sleeping disk spins up
+CLIP_TIMEOUT_NEXT = 6
+UPDATE_TIMEOUT = 8
 UI_LOG_PATH = os.path.expanduser('~/Library/Logs/SLogMetaRaw/ui.log')
 
 
@@ -109,6 +115,25 @@ def _reader_python():
     if python:
         return python
     raise RuntimeError('Python 3 executable not found for the metadata reader')
+
+
+def _mount_points():
+    """Mount points from the kernel table; mount(8) does not wait for unresponsive volumes."""
+    try:
+        out = subprocess.run(['/sbin/mount'], capture_output=True, text=True, timeout=2).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ['/']
+    points = [m.group(1) for m in re.finditer(r' on (/.*?) \(', out)]
+    return points or ['/']
+
+
+def _volume_of(path, mounts):
+    """The volume (st_dev) of a clip as its longest mount point, without touching the disk."""
+    best = '/'
+    for point in mounts:
+        if len(point) > len(best) and (path == point or path.startswith(point.rstrip('/') + '/')):
+            best = point
+    return best
 
 
 def _spawn_reader():
@@ -197,6 +222,8 @@ def main(resolve, fusion, bmd, selftest=False):
         'write_cs': [],
         'updating': False,      # update check in progress
         'update_done': None,    # result of the worker thread, applied by the timer
+        'update_serial': 0,
+        'update_started': 0.0,
         'update_newer': False,  # a newer release is available: the chip is green
         'update_url': '',
         'update_latest': '',
@@ -204,6 +231,7 @@ def main(resolve, fusion, bmd, selftest=False):
     done_idx = [0]  # number of 'done' entries already shown
     reader_cancelled = threading.Event()
     reader_thread = None
+    update_thread = [None]
     closing = [False]
     watchdog_gone = [0]  # consecutive watchdog ticks with the native window gone
 
@@ -219,12 +247,17 @@ def main(resolve, fusion, bmd, selftest=False):
         'ID': 'SLogMetaRawWin',
         'WindowTitle': t('S-Log MetaRaw %s – metadata Sony nel Media Pool · Ivan Mazzone + Claude (@Ivan_94m)') % __version__,
         'Geometry': [x, y, w, h],
-        # Deliberately no 'Events': {'Close': True}: on Resolve 21.1 (macOS)
-        # that key intercepts the native title-bar close but never forwards it
-        # to win.On.<ID>.Close, so the window can no longer be closed at all.
-        # Without the key the native close still closes the window natively;
-        # the watchdog timer then notices it and exits the dispatcher loop.
+        # No 'Events': {'Close': True}: on Resolve 21.1 (macOS) it swallows the
+        # title-bar close without forwarding it, and the window cannot be closed.
     }, ui.VGroup({'Spacing': 4}, [
+        # the version doubles as the update action: green and clickable when newer
+        ui.HGroup({'Weight': 0}, [
+            ui.Label({'Text': 'S-Log MetaRaw', 'Weight': 1}),
+            ui.Label({'ID': 'UpdateIcon', 'Weight': 0, 'Text': ''}),
+            ui.Button({'ID': 'Version', 'Text': 'v' + __version__, 'Weight': 0,
+                       'StyleSheet': VERSION_STYLE,
+                       'ToolTip': t('Controllo aggiornamenti: in arrivo')}),
+        ]),
         ui.HGroup({'Weight': 0}, [
             ui.ComboBox({'ID': 'Source', 'Weight': 1, 'MaximumSize': [240, 100],
                          'ToolTip': t('Quali clip leggere')}),
@@ -260,10 +293,6 @@ def main(resolve, fusion, bmd, selftest=False):
         ]),
         ui.HGroup({'Weight': 0}, [
             ui.Label({'ID': 'Status', 'Weight': 1, 'Text': ''}),
-            ui.Label({'ID': 'UpdateIcon', 'Weight': 0, 'Text': ''}),
-            ui.Button({'ID': 'Version', 'Text': 'v' + __version__, 'Weight': 0,
-                       'StyleSheet': VERSION_STYLE,
-                       'ToolTip': t('Controllo aggiornamenti: in arrivo')}),
         ]),
     ]))
     _ui_log('UI START source=%s pid=%s' % (__file__, os.getpid()))
@@ -293,15 +322,19 @@ def main(resolve, fusion, bmd, selftest=False):
 
     def set_running(mode):
         state['running'] = mode
-        busy = mode is not None or state['updating']
-        for key in ('Source', 'Read', 'Write', 'Export', 'Version'):
-            itm[key].Enabled = not busy
+        for key in ('Source', 'Read', 'Write', 'Export'):
+            itm[key].Enabled = mode is None
+        itm['Version'].Enabled = mode is None and not state['updating']
 
-    def _stop_timer():
+    def _stop_timer(which=None):
         try:
-            timer.Stop()
+            (which if which is not None else timer).Stop()
         except Exception:
             pass
+
+    def _stop_update_timer():
+        if update_timer is not None:
+            _stop_timer(update_timer)
 
     def _hide_window(context):
         """Hide a Resolve window even when its native proxy is half-invalid."""
@@ -320,13 +353,10 @@ def main(resolve, fusion, bmd, selftest=False):
             pass
 
     def close_window(ev=None, native_gone=False):
-        """Close the native window, then leave the dispatcher loop.
+        """Hide the window, then leave the dispatcher loop (idempotent).
 
-        The window Close event is delivered before the dispatcher returns; on
-        builds that close the native window without any event the watchdog
-        calls this with native_gone=True and the window is already off screen.
-        Hiding here avoids leaving a stale native window visible while the
-        reader thread is being stopped in the final cleanup block.
+        Hiding first keeps a stale native window off screen while the reader
+        thread is stopped; native_gone=True comes from the watchdog.
         """
         if closing[0]:
             return
@@ -336,6 +366,7 @@ def main(resolve, fusion, bmd, selftest=False):
         state['running'] = None
         state['updating'] = False
         _stop_timer()
+        _stop_update_timer()
         if not native_gone:
             _hide_window('Window hide on close')
         try:
@@ -354,12 +385,9 @@ def main(resolve, fusion, bmd, selftest=False):
             return None
 
     def _watchdog_tick():
-        """Catch a native close that Resolve never forwarded as an event.
+        """Catch a native close that Resolve 21.x never forwarded as an event.
 
-        Resolve 21.x builds can close the native window when the title-bar
-        button is clicked without delivering win.On.<ID>.Close. Two
-        consecutive ticks with the window gone confirm it really disappeared
-        (a single stray read is ignored), then the shared cleanup runs."""
+        Two consecutive ticks with the window gone confirm it (one stray read is ignored)."""
         try:
             if closing[0]:
                 return
@@ -407,28 +435,41 @@ def main(resolve, fusion, bmd, selftest=False):
         ok = skipped = errors = slow = 0
         cache_error = None
         proc = None
+        started = time.monotonic()
+        mounts = _mount_points()
+        seen = set()      # volumes with a clip already read: the next ones get the shorter limit
+        dead = {}         # volume -> clips not read after it stopped answering
         try:
             for entry in queue:
                 if reader_cancelled.is_set():
                     break
                 uid, name, path = entry['uid'], entry['name'], entry['path']
                 row = {'uid': uid}
+                volume = _volume_of(path, mounts)
+                if volume in dead:
+                    dead[volume] += 1
+                    row['values'] = [name] + [''] * 9 + [t('saltata: il volume non risponde')]
+                    state['done'].append(row)
+                    state['processed'] += 1
+                    continue
+                limit = CLIP_TIMEOUT_NEXT if volume in seen else CLIP_TIMEOUT_FIRST
+                seen.add(volume)
                 msg = None
                 if proc is None:
                     proc = _spawn_reader()
                 try:
                     proc.stdin.write(path + '\n')
                     proc.stdin.flush()
-                    msg = _read_result(proc, time.monotonic() + CLIP_TIMEOUT, reader_cancelled)
+                    msg = _read_result(proc, time.monotonic() + limit, reader_cancelled)
                 except (BrokenPipeError, OSError):
                     msg = None
                 if msg is None:
-                    # Start the replacement only if another clip needs it.
                     _stop_reader(proc)
                     proc = None
                     if reader_cancelled.is_set():
                         break
-                    row['values'] = [name] + [''] * 9 + [t('saltata: lettura troppo lenta (>%ds)') % CLIP_TIMEOUT]
+                    row['values'] = [name] + [''] * 9 + [t('saltata: lettura troppo lenta (>%ds)') % limit]
+                    dead[volume] = 1
                     slow += 1
                 elif msg.get('ok'):
                     r = msg['result']
@@ -449,10 +490,14 @@ def main(resolve, fusion, bmd, selftest=False):
                 state['processed'] += 1
             msg_text = (t('Lette %d clip · saltate %d · lente %d · errori %d. Seleziona una riga per vedere tutti i dati, poi "Scrivi in Resolve".')
                         % (ok, skipped, slow, errors))
+            for volume, count in dead.items():
+                msg_text += ' ' + t('Il volume «%s» non risponde: saltate %d clip.') % (
+                    os.path.basename(volume) or volume, count)
             if cache_error:
                 msg_text += t('  ATTENZIONE: scheda per il plugin non salvata (%s).') % cache_error
             state['summary'] = msg_text
             state['had_errors'] = bool(errors or slow or cache_error)
+            _ui_log('Lettura: %d clip in %.2f s' % (state['processed'], time.monotonic() - started))
         except Exception as exc:
             _log_exception('Metadata reader')
             state['summary'] = t('Errore: %s  (dettagli nella console di Resolve)') % exc
@@ -528,6 +573,9 @@ def main(resolve, fusion, bmd, selftest=False):
         state['write_cs'] = []
         state['write_levels'] = []
         state['finished'] = False
+        # every property read is a call into Resolve: once per write, not once per clip
+        state['write_opts'] = {'set_color_space': itm['SetICS'].Checked, 'overwrite': itm['Overwrite'].Checked,
+                               'add_tags': itm['Tags'].Checked, 'set_data_level': itm['SetLevels'].Checked}
         set_running('write')
         set_progress(t('Scrittura in Resolve… %d/%d') % (0, state['total']), 0)
         if TIMER_OK:
@@ -537,17 +585,16 @@ def main(resolve, fusion, bmd, selftest=False):
                 _pump_write()
 
     def _pump_write():
-        for _ in range(WRITE_CHUNK):
+        stop = time.monotonic() + WRITE_BUDGET
+        while True:
             if not state['write_queue']:
                 state['finished'] = True
                 break
+            if time.monotonic() >= stop:
+                break
             uid, clip, r = state['write_queue'].pop(0)
             try:
-                rep = resolve_io.apply_to_clip(clip, r,
-                                               set_color_space=itm['SetICS'].Checked,
-                                               overwrite=itm['Overwrite'].Checked,
-                                               add_tags=itm['Tags'].Checked,
-                                               set_data_level=itm['SetLevels'].Checked)
+                rep = resolve_io.apply_to_clip(clip, r, **state['write_opts'])
             except Exception:   # one problematic clip must not stop the others
                 _log_exception('Metadata write')
                 state['write_broken'] += 1
@@ -635,32 +682,33 @@ def main(resolve, fusion, bmd, selftest=False):
         if who == 'WatchdogTimer':
             _watchdog_tick()
             return
-        if state['running']:
-            if state['running'] == 'read':
-                _drain_read()
-            else:
-                _pump_write()
-        elif state['updating'] and state['update_done'] is not None:
-            _apply_update()
+        if who in ('UpdateTimer', None):
+            _update_tick()
+            if who:
+                return
+        if state['running'] == 'read':
+            if reader_thread is not None:
+                reader_thread.join(GIL_YIELD)
+            _drain_read()
+        elif state['running'] == 'write':
+            _pump_write()
 
     TIMER_OK = False
+    update_timer = None
     try:
         timer = ui.Timer({'ID': 'ProgressTimer', 'Interval': TIMER_MS})
-        if timer is None:
+        update_timer = ui.Timer({'ID': 'UpdateTimer', 'Interval': TIMER_MS})
+        if timer is None or update_timer is None:
             raise RuntimeError('UIManager Timer unavailable')
-        # A standalone UITimer belongs to the dispatcher, not to the window's
-        # child widgets. Registering win.On.ProgressTimer may silently succeed
-        # even though no Timeout events are ever delivered there.
+        # Timeout events of a standalone UITimer reach the dispatcher only: a
+        # handler registered as win.On.ProgressTimer is accepted but never called.
         disp.On.Timeout = guard(on_timer)
         TIMER_OK = True
     except Exception:
-        timer = None
+        timer = update_timer = None
 
-    # Watchdog: a slow always-on timer that keeps ticking while the loop is
-    # idle too, to catch a native close that Resolve never reported as an
-    # event. If it cannot be created the "Chiudi" button still closes the
-    # window; a native close would just leave the loop running until Resolve
-    # quits.
+    # Always-on slow timer: catches a native close that Resolve never reported
+    # as an event. Without it the "Chiudi" button still closes the window.
     WATCHDOG_OK = False
     watchdog = None
     try:
@@ -678,30 +726,42 @@ def main(resolve, fusion, bmd, selftest=False):
     win.On.Export.Clicked = guard(on_export)
     win.On.Clips.CurrentItemChanged = guard(on_select)
     win.On.Clips.ItemClicked = guard(on_select)
-    # Two routes to close the window:
-    # - the native title bar: on builds that forward the Close event this
-    #   callback runs directly; on builds that only close the window natively
-    #   (Resolve 21.x on macOS) the watchdog timer notices the window
-    #   disappearing and calls the same cleanup;
-    # - the "Chiudi" button: a deterministic fallback that always works.
-    # Both routes share the same idempotent cleanup path.
+    # the title bar reaches close_window by event or through the watchdog; the
+    # "Chiudi" button always works
     win.On.CloseButton.Clicked = close_window
     win.On.SLogMetaRawWin.Close = close_window
 
     # --- update check -----------------------------------------------------------
 
-    def _update_worker():
+    def _update_worker(serial):
         try:
-            state['update_done'] = upd.check()
+            result = upd.check()
         except Exception as exc:
             _log_exception('Update check')
             result = upd.blank()
             result['error'] = str(exc)
+        if state['update_serial'] == serial:   # an answer after the time limit is dropped
             state['update_done'] = result
+
+    def _update_tick():
+        if not state['updating']:
+            return
+        if update_thread[0] is not None:
+            update_thread[0].join(GIL_YIELD)
+        if state['update_done'] is not None:
+            _apply_update()
+        elif time.monotonic() - state['update_started'] > UPDATE_TIMEOUT:
+            state['updating'] = False
+            state['update_serial'] += 1
+            _stop_update_timer()
+            set_running(state['running'])
+            itm['UpdateIcon'].Text = ''
+            itm['Version'].ToolTip = t('Aggiornamenti non verificati')
+            status(t('Aggiornamenti non verificati: GitHub non ha risposto entro %d s.') % UPDATE_TIMEOUT)
 
     def _apply_update():
         state['updating'] = False
-        set_running(None)
+        set_running(state['running'])
         res = state['update_done'] or upd.blank()
         itm['UpdateIcon'].Text = ''
         if res.get('newer') and res.get('dmg_url'):
@@ -723,7 +783,7 @@ def main(resolve, fusion, bmd, selftest=False):
             itm['Version'].StyleSheet = VERSION_STYLE
             itm['Version'].ToolTip = t('Nessuna versione più recente (sei alla %s).') % res['current']
             status(t('Nessuna versione più recente (sei alla %s).') % res['current'])
-        _stop_timer()
+        _stop_update_timer()
 
     def on_version(ev):
         if state['running'] or state['updating']:
@@ -739,13 +799,16 @@ def main(resolve, fusion, bmd, selftest=False):
         state['updating'] = True
         set_running(None)
         state['update_done'] = None
+        state['update_serial'] += 1
+        state['update_started'] = time.monotonic()
         itm['UpdateIcon'].Text = '🔍'
         itm['Version'].ToolTip = t('Controllo aggiornamenti…')
         if TIMER_OK:
-            threading.Thread(target=_update_worker, daemon=True).start()
-            timer.Start()
+            update_thread[0] = threading.Thread(target=_update_worker, args=(state['update_serial'],), daemon=True)
+            update_thread[0].start()
+            update_timer.Start()
         else:
-            _update_worker()
+            _update_worker(state['update_serial'])
             _apply_update()
 
     win.On.Version.Clicked = guard(on_version)
@@ -778,6 +841,7 @@ def main(resolve, fusion, bmd, selftest=False):
     finally:
         reader_cancelled.set()
         _stop_timer()
+        _stop_update_timer()
         if watchdog is not None:
             try:
                 watchdog.Stop()

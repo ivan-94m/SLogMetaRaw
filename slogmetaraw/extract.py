@@ -6,13 +6,15 @@ read_clip(path) -> {
     'display': {normalised key: Catalyst-style string},
     'sections': [(title, [(label, display), ...]), ...],   # Catalyst-like view
     'rtmd': [decoded first-frame entries], 'changes': {...},
-    'warnings': [...], 'bytes_read': int,
+    'sampling': {'total', 'planned', 'read', 'partial'},
+    'warnings': [...], 'bytes_read': int, 'reads': int,
 }
 Nothing is written to the clip or next to it.
 """
 import os
 import re
 import struct
+import time
 
 from . import codec, datalevel, mp4, mxf, nrt, rtmd
 
@@ -23,6 +25,8 @@ CHANGE_KEYS = ('iris_fnumber', 'focus_distance_m', 'focal_length_mm', 'shutter_s
                'shutter_angle', 'iso', 'exposure_index', 'master_gain_db', 'white_balance_k',
                'tint', 'nd_filter', 'awb_mode')
 PARTIAL_READ = 2048  # bytes per sampled rtmd frame (lens + camera sets come first)
+FULL_SAMPLES = 24    # a record sampled this finely is complete (the script's reading)
+MXF_WINDOWS = 12     # byte-scan windows when an MXF has no usable index
 
 
 class DatalessError(Exception):
@@ -30,15 +34,13 @@ class DatalessError(Exception):
 
 
 def find_sidecar(path):
+    """Sony's <stem>M01.XML next to the clip; two spellings cover case-sensitive volumes."""
     d, name = os.path.split(path)
     stem = os.path.splitext(name)[0]
-    want = (stem + 'M01.XML').lower()
-    try:
-        for n in os.listdir(d or '.'):
-            if n.lower() == want:
-                return os.path.join(d, n)
-    except OSError:
-        pass
+    for suffix in ('M01.XML', 'M01.xml'):
+        candidate = os.path.join(d, stem + suffix)
+        if os.path.isfile(candidate):
+            return candidate
     return None
 
 
@@ -84,19 +86,60 @@ def _color_space(gamma, primaries):
     return gamma or primaries or ''
 
 
-def _sample_indices(n, fps, interval, max_samples):
-    if n <= 0:
-        return []
-    if max_samples <= 1:
-        return [n - 1]
+def _grid(n, fps, interval):
     step = max(1, int(round((fps or 25) * interval)))
     idx = list(range(0, n, step))
     if idx[-1] != n - 1:
         idx.append(n - 1)
+    return idx
+
+
+def _coarse_to_fine(items):
+    """First, last, then halves: a sampling cut short still spans the whole clip."""
+    if len(items) <= 2:
+        return list(items)
+    out = [items[0], items[-1]]
+    spans = [(0, len(items) - 1)]
+    while spans:
+        nxt = []
+        for lo, hi in spans:
+            if hi - lo >= 2:
+                mid = (lo + hi) // 2
+                out.append(items[mid])
+                nxt += [(lo, mid), (mid, hi)]
+        spans = nxt
+    return out
+
+
+def _sample_indices(n, fps, interval, max_samples):
+    """At most max_samples frame indices, spread evenly, in coarse-to-fine reading order."""
+    if n <= 0:
+        return []
+    if max_samples <= 1:
+        return [0]
+    idx = _grid(n, fps, interval)
     if len(idx) > max_samples:
         k = (len(idx) - 1) / (max_samples - 1)
         idx = sorted({idx[int(round(i * k))] for i in range(max_samples)})
-    return idx
+    return _coarse_to_fine(idx)
+
+
+def _sample(out, order, read_one, deadline, full, total):
+    """Read the samples in order until the deadline; the first two (first and last) always."""
+    got = {}
+    for i, idx in enumerate(order):
+        if i >= 2 and deadline is not None and time.monotonic() >= deadline:
+            break
+        got[idx] = read_one(idx)
+    series = {k: [] for k in CHANGE_KEYS}
+    for idx in sorted(got):
+        vals = got[idx] or {}
+        for k in CHANGE_KEYS:
+            if k in vals:
+                series[k].append(vals[k])
+    out['changes'] = _summarise_changes(series)
+    out['sampling'] = {'total': total, 'planned': len(order), 'read': len(got),
+                       'partial': len(got) < len(order) or len(order) < full}
 
 
 def _summarise_changes(series):
@@ -125,17 +168,17 @@ def _audio_info(track):
             'audio_channels': channels, 'audio_bits': bits, 'audio_rate': rate}
 
 
-def _read_mp4(f, out, interval, max_samples):
+def _read_mp4(f, out, interval, max_samples, deadline, lut):
     m = mp4.MP4(f)
     meta = out['meta']
     xml = out.pop('_sidecar_xml', None) or m.meta_xml
     if xml:
         meta.update(nrt.parse(xml))
-        out['nrt_source'] = 'embedded' if m.meta_xml else 'sidecar'
-    if m.meta_items.get('Look Control data'):
-        out['embedded_lut'] = m.meta_items['Look Control data']
-    if m.meta_items.get('Lens profile'):
-        meta['lens_profile_bytes'] = len(m.meta_items['Lens profile'])
+        out['nrt_source'] = 'sidecar' if out.get('sidecar') else 'embedded'
+    if lut and 'Look Control data' in m.items:
+        out['embedded_lut'] = m.item('Look Control data')
+    if m.items.get('Lens profile'):
+        meta['lens_profile_bytes'] = m.items['Lens profile'][1]
     video = m.track(handler=b'vide')
     if video:
         info = codec.parse_sample_entry(video.codec, video.sample_entry)
@@ -161,28 +204,39 @@ def _read_mp4(f, out, interval, max_samples):
         return
     n = track.sample_count()
     fps = meta.get('fps')
-    wanted = _sample_indices(n, fps, interval, max_samples)
-    offsets = track.sample_offsets(wanted)
-    series = {k: [] for k in CHANGE_KEYS}
-    for i in wanted:
+    order = _sample_indices(n, fps, interval, max_samples)
+    offsets = track.sample_offsets(order)
+
+    def read_one(i):
         if i not in offsets:
-            continue
+            return None
         size = track.sample_size(i)
-        buf = f.read_at(offsets[i], size if i == 0 else min(size, PARTIAL_READ))
-        entries = rtmd.decode_mp4_sample(buf)
+        entries = rtmd.decode_mp4_sample(f.read_at(offsets[i], size if i == 0 else min(size, PARTIAL_READ)))
         if i == 0:
             out['rtmd'] = entries
-        vals = rtmd.values(entries)
-        for k in CHANGE_KEYS:
-            if k in vals:
-                series[k].append(vals[k])
-    out['changes'] = _summarise_changes(series)
-    out['rtmd_samples'] = {'total': n, 'read': len(offsets)}
+        return rtmd.values(entries)
+
+    full = min(len(_grid(n, fps, interval)), FULL_SAMPLES) if n else 0
+    _sample(out, order, read_one, deadline, full, n)
 
 
-def _read_mxf(f, out, interval, max_samples):
+def _parse_sps(meta, kind, sps):
+    if sps:
+        try:
+            info = codec.parse_avc_sps(sps) if kind == 'avc' else codec.parse_hevc_sps(sps)
+            meta.update({'v_' + k: v for k, v in info.items()})
+        except (IndexError, ValueError):
+            pass
+
+
+def _read_mxf(f, out, interval, max_samples, deadline):
     meta = out['meta']
-    xml = out.pop('_sidecar_xml', None) or mxf.find_nrt_xml(f)
+    lay = mxf.layout(f)
+    head = mxf.WINDOW
+    if lay:
+        head = min(lay['header_end'], mxf.HEAD_MAX)
+        f.preload(0, lay['essence'] if lay['essence'] <= mxf.HEAD_MAX else head)
+    xml = out.pop('_sidecar_xml', None) or mxf.find_nrt_xml(f, head)
     if xml:
         meta.update(nrt.parse(xml))
         out['nrt_source'] = 'sidecar' if out.get('sidecar') else 'embedded'
@@ -193,40 +247,59 @@ def _read_mxf(f, out, interval, max_samples):
     if frames:
         meta['duration_s'] = frames / fps
         meta['bitrate_mbps'] = f.size * 8 / meta['duration_s'] / 1e6
-    kind, sps = mxf.find_sps(f)
-    if sps:
-        try:
-            info = codec.parse_avc_sps(sps) if kind == 'avc' else codec.parse_hevc_sps(sps)
-            meta.update({'v_' + k: v for k, v in info.items()})
-        except (IndexError, ValueError):
-            pass
-    meta.update(mxf.find_picture_levels(f))
+    meta.update(mxf.find_picture_levels(f, head))
     ac = meta.get('audio_codec') or ''
     m = re.match(r'LPCM(\d+)', ac)
     if m:
         meta['audio_codec'] = 'Linear PCM'
         meta['audio_bits'] = int(m.group(1))
-    first = mxf.find_rtmd(f, 0)
+
+    start = mxf.content_start(f, lay) if lay else None
+    first, (kind, sps) = mxf.read_package(f, start, want_sps=True) if start is not None else (None, (None, None))
+    if not sps:
+        # from 0 a start code can match inside header metadata or index
+        kind, sps = mxf.find_sps(f, start=start if start is not None else (lay['essence'] if lay else 0))
+    _parse_sps(meta, kind, sps)
+    if not first:
+        first = mxf.find_rtmd(f, lay['essence'] if lay else 0, 2 * mxf.WINDOW if lay else mxf.WINDOW)
     if not first:
         out['warnings'].append('Metadata di acquisizione non trovati nell\'MXF.')
         return
     out['rtmd'] = rtmd.decode(first)
-    series = {k: [] for k in CHANGE_KEYS}
-    vals = rtmd.values(out['rtmd'])
-    for k in CHANGE_KEYS:
-        if k in vals:
-            series[k].append(vals[k])
+    first_values = rtmd.values(out['rtmd'])
+
+    index = mxf.read_index(f, lay) if start is not None else mxf.Index()
+    units = index.count
+    if index.edit_unit_bytes:
+        units = frames or ((lay['footer'] or f.size) - start) // index.edit_unit_bytes
+    if units >= 2:
+        def read_one(unit):
+            if unit == 0:
+                return first_values
+            offset = index.offset(unit)
+            if offset is None:
+                return None
+            payload, _sps = mxf.read_package(f, start + offset)
+            if payload is None:   # the index does not point at a package: scan from there
+                payload = mxf.find_rtmd(f, start + offset, 3 * 1024 * 1024)
+            return rtmd.values(rtmd.decode(payload[:PARTIAL_READ])) if payload else None
+
+        order = _sample_indices(units, fps, interval, max_samples)
+        _sample(out, order, read_one, deadline, min(len(_grid(units, fps, interval)), FULL_SAMPLES), units)
+        return
+
+    # no index: the first package plus byte-scan windows spread across the file
     secs = meta.get('duration_s') or 0
-    n_windows = min(max(0, int(secs / max(interval, 1.0))), max_samples, 12)
-    for w in range(1, n_windows + 1):
-        pos = int(f.size * w / (n_windows + 1))
-        payload = mxf.find_rtmd(f, pos, 3 * 1024 * 1024)
-        if payload:
-            v = rtmd.values(rtmd.decode(payload[:PARTIAL_READ]))
-            for k in CHANGE_KEYS:
-                if k in v:
-                    series[k].append(v[k])
-    out['changes'] = _summarise_changes(series)
+    windows = min(max(0, int(secs / max(interval, 1.0))), MXF_WINDOWS)
+    n = min(windows, max(0, max_samples - 1))
+
+    def read_window(w):
+        if w == 0:
+            return first_values
+        payload = mxf.find_rtmd(f, int(f.size * w / (n + 1)), 3 * 1024 * 1024)
+        return rtmd.values(rtmd.decode(payload[:PARTIAL_READ])) if payload else None
+
+    _sample(out, _coarse_to_fine(list(range(n + 1))), read_window, deadline, windows + 1, frames)
 
 
 def tc_to_frames(tc, fps):
@@ -254,6 +327,13 @@ def _normalise(out):
         if e['key'] and e['value'] is not None and e['key'] not in meta:
             meta[e['key']] = e['value']
             disp[e['key']] = e['display']
+    if not meta.get('capture_gamma'):
+        # no per-frame metadata (e.g. an MXF whose ANC was not found): the NRT XML names the curve
+        gamma, primaries = nrt.capture_space(meta)
+        if gamma:
+            meta['capture_gamma'] = gamma
+            if primaries:
+                meta.setdefault('color_primaries', primaries)
     attrs = meta.get('camera_attributes', '')
     m = re.search(r'Version\s*([\w.]+)', attrs)
     if m and not meta.get('firmware'):
@@ -408,15 +488,20 @@ def _sections(out):
             if e['key'] and int(e['tag'], 16) >= 0xe400]
     if stab:
         sections.append(('STABILIZZAZIONE / IMU / OTTICA (per Gyroflow, Catalyst Stabilize)', stab))
+    partial = (out.get('sampling') or {}).get('partial')
     if out.get('changes'):
         ch = []
         for k, c in out['changes'].items():
             label = rtmd_label(k)
             dv = lambda v: rtmd.display_value(k, v)  # noqa: E731
             txt = '%s → %s' % (dv(c['first']), dv(c['last']))
-            if c['min'] is not None and c['min'] != c['max']:
-                txt += '  (min %s, max %s)' % (dv(c['min']), dv(c['max']))
-            ch.append((label, txt + '  [%d valori diversi]' % c['distinct']))
+            if partial:
+                txt += '  (campionamento parziale)'
+            else:
+                if c['min'] is not None and c['min'] != c['max']:
+                    txt += '  (min %s, max %s)' % (dv(c['min']), dv(c['max']))
+                txt += '  [%d valori diversi]' % c['distinct']
+            ch.append((label, txt))
         sections.append(('VARIAZIONI DURANTE LA CLIP', ch))
     unknown = [(e['label'] + ' [%s]' % e['set'], e['raw']) for e in out.get('rtmd', []) if not e['key']]
     if unknown:
@@ -431,28 +516,39 @@ def rtmd_label(key):
     return key
 
 
-def read_clip(path, interval=1.0, max_samples=120, allow_dataless=False):
+def read_clip(path, interval=1.0, max_samples=FULL_SAMPLES, allow_dataless=False, deadline=None,
+              lut=False):
+    """deadline: time.monotonic() value after which sampling stops (first and last are always read).
+
+    lut=True also returns the embedded look LUT ('embedded_lut', ~434 KB on FX30 files).
+    """
     path = os.path.abspath(path)
     st = os.stat(path)
     if getattr(st, 'st_flags', 0) & SF_DATALESS and not allow_dataless:
         raise DatalessError('File non presente in locale, solo segnaposto: %s' % path)
-    out = {'path': path, 'meta': {}, 'display': {}, 'rtmd': [], 'changes': {}, 'warnings': []}
+    out = {'path': path, 'meta': {}, 'display': {}, 'rtmd': [], 'changes': {}, 'warnings': [],
+           'sampling': {'total': 0, 'planned': 0, 'read': 0, 'partial': False}}
     side = find_sidecar(path)
     if side:
         out['sidecar'] = side
         with open(side, 'rb') as fh:
             out['_sidecar_xml'] = fh.read()
     with mp4.CountingFile(path) as f:
+        f.preload(0, mp4.META_PRELOAD)
         head = f.read_at(0, 16)
         if mxf.is_mxf(head):
             out['container'] = 'MXF'
-            _read_mxf(f, out, interval, max_samples)
+            _read_mxf(f, out, interval, max_samples, deadline)
         else:
             out['container'] = 'MP4'
-            _read_mp4(f, out, interval, max_samples)
+            _read_mp4(f, out, interval, max_samples, deadline, lut)
         out['bytes_read'] = f.bytes_read
+        out['reads'] = f.reads
         out['file_size'] = f.size
     out.pop('_sidecar_xml', None)
+    if out['sampling']['partial']:
+        out['warnings'].append('Campionamento parziale (%d fotogrammi campione): le variazioni durante '
+                               'la clip potrebbero non essere tutte elencate.' % out['sampling']['read'])
     _normalise(out)
     out['sections'] = _sections(out)
     return out

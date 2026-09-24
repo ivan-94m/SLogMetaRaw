@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Builds dist/SLogMetaRaw-<version>.dmg with the installer (.pkg), the one-page guide and the uninstaller.
+# Builds dist/SLogMetaRaw-<version>.dmg with the installer (.pkg), the three-page guides and the uninstaller.
 #   ./packaging/build_installer.sh
 set -euo pipefail
 export COPYFILE_DISABLE=1   # no AppleDouble ._ files in the package
@@ -24,8 +24,13 @@ for s in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$ROOT/assets/SLogMetaRaw.icns"
 cp "$ROOT/assets/effect_256.png" "$ROOT/ofx/SLogMetaRaw/com.slogmetaraw.SLogMetaRaw.png"
+cp "$ROOT/assets/detail_256.png" "$ROOT/ofx/SLogMetaRaw/com.slogmetaraw.SLogMetaRawDetail.png"
 make -C "$ROOT/ofx/SLogMetaRaw" >/dev/null
 cp "$ROOT/assets/icon_1024.png" "$PKG_DIR/guide/icon.png"
+# the guides carry @VERSION@ like the installer pages: print a substituted copy
+GUIDE="$BUILD/guide"; mkdir -p "$GUIDE"
+cp "$PKG_DIR/guide/"* "$GUIDE/"
+sed -i '' "s/@VERSION@/$VERSION/g" "$GUIDE/guida.html" "$GUIDE/guide-en.html"
 # find any Chromium-based browser for headless PDF generation
 CHROME=""
 for app in \
@@ -41,17 +46,17 @@ if [[ -z "$CHROME" ]]; then
   exit 1
 fi
 "$CHROME" --headless=new --disable-gpu --no-pdf-header-footer \
-    --print-to-pdf="$BUILD/dmg/Guida S-Log MetaRaw (italiano).pdf" "file://$PKG_DIR/guide/guida.html" 2>/dev/null
+    --print-to-pdf="$BUILD/dmg/Guida S-Log MetaRaw (italiano).pdf" "file://$GUIDE/guida.html" 2>/dev/null
 "$CHROME" --headless=new --disable-gpu --no-pdf-header-footer \
-    --print-to-pdf="$BUILD/dmg/S-Log MetaRaw Guide (english).pdf" "file://$PKG_DIR/guide/guide-en.html" 2>/dev/null
-# each guide must stay a single page
+    --print-to-pdf="$BUILD/dmg/S-Log MetaRaw Guide (english).pdf" "file://$GUIDE/guide-en.html" 2>/dev/null
+# each guide must stay within three pages
 for g in "$BUILD/dmg/Guida S-Log MetaRaw (italiano).pdf" "$BUILD/dmg/S-Log MetaRaw Guide (english).pdf"; do
   python3 - "$g" <<'EOF'
 import sys
 d = open(sys.argv[1], 'rb').read()
 n = d.count(b'/Type /Page') - d.count(b'/Type /Pages')
-if n != 1:
-    sys.exit('%s: %d pagine invece di 1' % (sys.argv[1], n))
+if not 1 <= n <= 3:
+    sys.exit('%s: %d pagine invece di 3 al massimo' % (sys.argv[1], n))
 EOF
 done
 

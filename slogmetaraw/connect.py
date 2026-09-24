@@ -14,6 +14,7 @@ the launcher), so the fallback tries the local IPv4 addresses read from ifconfig
 import os
 import socket
 import subprocess
+import unicodedata
 
 
 def _local_ipv4_addresses():
@@ -66,6 +67,10 @@ def connect():
                        'Resolve sia aperto con un progetto e che lo scripting esterno sia attivo')
 
 
+def _nfc(path):
+    return unicodedata.normalize('NFC', path)
+
+
 def apply_path(resolve, path, r, set_color_space=False, overwrite=True, add_tags=False,
                set_data_level=True):
     """Write the metadata of one clip into every Media Pool item with that file path.
@@ -81,13 +86,18 @@ def apply_path(resolve, path, r, set_color_space=False, overwrite=True, add_tags
         raise RuntimeError('Media Pool non disponibile')
 
     from . import resolve_io
-    real = os.path.realpath(path)
+    pool_paths = [(clip, resolve_io.clip_path(clip))
+                  for clip in resolve_io.iter_media_pool_clips(pool.GetRootFolder())]
+    pool_paths = [(clip, _nfc(p)) for clip, p in pool_paths if p]
+    wanted = _nfc(path)
+    matches = [clip for clip, p in pool_paths if p == wanted]
+    if not matches:
+        # a symlink on either side: realpath touches the disk, so only when nothing matched
+        real = _nfc(os.path.realpath(path))
+        matches = [clip for clip, p in pool_paths if _nfc(os.path.realpath(p)) == real]
     written = failed = clips = 0
     level = {}
-    for clip in resolve_io.iter_media_pool_clips(pool.GetRootFolder()):
-        clip_path = resolve_io.clip_path(clip)
-        if not clip_path or os.path.realpath(clip_path) != real:
-            continue
+    for clip in matches:
         report = resolve_io.apply_to_clip(clip, r, set_color_space=set_color_space,
                                           overwrite=overwrite, add_tags=add_tags,
                                           set_data_level=set_data_level)

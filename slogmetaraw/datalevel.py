@@ -89,7 +89,7 @@ FULL_SCALE_GAMMAS = {
     'Scene Linear',
 }
 # Sony NRT XML <Item name="CaptureGammaEquation"> values (lower case in the file).
-FULL_SCALE_XML_GAMMAS = {'s-log', 's-log2', 's-log3', 'slog', 'slog2', 'slog3',
+FULL_SCALE_XML_GAMMAS = {'s-log', 's-log2', 's-log3', 's-log3-cine', 'slog', 'slog2', 'slog3',
                          'aces', 'acescct', 'acesproxy', 'scene-linear', 'cine-log'}
 
 # Curves worth naming in the note because they are the usual source of confusion:

@@ -1,7 +1,7 @@
 # False color: come lo fa CineMatch, come lo fa S-Log MetaRaw
 
 Ricerca alla base dei tre toggle *False color* del nodo e dello stadio `sm_false_color`
-di `DevelopMath.h`. Le affermazioni su CineMatch vengono dal **binario installato**
+(`ofx/SLogMetaRaw/math/FalseColor.h`). Le affermazioni su CineMatch vengono dal **binario installato**
 (`/Library/OFX/Plugins/CineMatch.ofx.bundle`) e dalle sue risorse, non dalla
 documentazione: dove la documentazione conferma, è citata.
 
@@ -164,38 +164,47 @@ Le fermate sono misurate sulla **luminanza lineare**, non sul segnale codificato
 quindi indipendenti dalla curva log della clip, e la lettura non cambia passando da
 S-Log2 a S-Log3 o da una timeline all'altra.
 
-### Temperatura e tinta — la differenza sostanziale
+### Temperatura e tinta — come CineMatch, sull'asse giusto
 
-Qui non si classifica per tinta: si **misura**. Per ogni pixel si calcola la distanza dal
-bianco dello spazio di lavoro in **CIE 1960 uv**, la stessa coordinata su cui il nodo
-costruisce già il bilanciamento del bianco, e la si proietta attraverso **l'inverso della
-risposta reale dei due slider**, misurata in `buildParams` al valore corrente:
+Dalla 2.0 le due viste **si comportano come quelle di CineMatch**: l'immagine diventa grigia,
+le dominanti si colorano con le sue quattro tinte canoniche e i quasi-neutri vengono esaltati
+fino a 8×. Si regola come là: **muovi lo slider finché ciò che deve essere neutro resta grigio.**
 
-```
-neutralUV(k, t, k,       t)      dove sta il neutro adesso
-neutralUV(k, t, k + 100, t)      dove va con +100 K di slider
-neutralUV(k, t, k,   t + 5)      dove va con +5 di tint
-```
+| Vista | Dominante | Colore (HSL come CineMatch) | Cosa fare |
+|---|---|---|---|
+| Temperatura | fredda | blu, 211° | alza *Color Temp* |
+| Temperatura | calda | arancio, 29° | abbassa *Color Temp* |
+| Tinta | verde | verde, 108° | alza *Tint* |
+| Tinta | magenta | magenta, 306° | abbassa *Tint* |
 
-Invertita quella matrice 2×2, il numero dietro a una banda **è in Kelvin e in unità di
-tint**: dice di quanto muovere lo slider, non "c'è una dominante". Verificato in
-`tests/test_falsecolor.py`: un errore di 100 K su 5600 K si legge 100,5 K; un errore di
-20 di tint si legge 20,04.
+Per ogni pixel:
 
-Ricavare la derivata al valore corrente dello slider, invece che da una tangente teorica
-al locus planckiano, è quello che toglie la diafonia fra i due assi: un errore di sola
-tinta di ±20 unità sbava di ±5 K invece che di ±170 K, e la lettura resta buona anche a
-3200 K, dove la scala Kelvin è quasi quattro volte più fitta che a 6500 K.
+1. **Saturazione mostrata** = saturazione HSL del pixel codificato per il display (gamma 2,2,
+   normalizzata, quindi indipendente dall'esposizione) moltiplicata per `8 − 7·s`: 8× vicino
+   al neutro, 1× sui colori pieni. È il `saturate(v, remap(s, 0, 1, 8, 1))` di CineMatch.
+2. **Luminosità** = il grigio della vista, che sale con gli stop: la scena resta leggibile.
+3. **Asse**: qui sta l'unica differenza. CineMatch decide per *tinta HSL* (un pixel è "caldo" se
+   la sua tinta cade fra −9° e 58°). S-Log MetaRaw misura la deviazione dal bianco in
+   **CIE 1960 uv** e la proietta sull'inverso della **risposta reale dei due slider**, misurata
+   al valore corrente:
 
-| Vista | Banda centrale | Poi | Poi | Oltre |
-|---|---|---|---|---|
-| Temperatura | ±75 K → bianco | ±200 K | ±500 K | blu / rosso pieno |
-| Tinta | ±2 → bianco | ±5 | ±12 | verde / magenta pieno |
+   ```
+   neutralUV(k, t, k,       t)      dove sta il neutro adesso
+   neutralUV(k, t, k + 100, t)      dove va con +100 K di slider
+   neutralUV(k, t, k,   t + 5)      dove va con +5 di tint
+   ```
 
-**Bianco = neutro.** Il colore di una banda è la dominante che c'è davvero: scaldi quello
-che legge blu, togli verde a quello che legge verde. I pixel troppo scuri per portare una
-tinta affidabile (sotto −4 stop) sono marcati grigio scuro, i clippati rosso — marcati,
-non indovinati, perché lì la crominanza non significa niente.
+   Il pixel si colora nella vista della temperatura se la sua dominante pesa più in Kelvin
+   che in tint, e viceversa. Così **ogni vista risponde solo al suo slider**: una dominante
+   verde lascia grigia la vista della temperatura, invece di finire in una banda "calda" o
+   "fredda" a seconda della tinta HSL. Un errore di sola tinta di 20 unità sbava di meno di
+   40 K sull'altro asse, anche a 3200 K (verificato in `tests/test_falsecolor.py`).
+4. **Pixel che non si possono giudicare**: sotto −6 stop e sopra +5,5 stop il colore sfuma nel
+   grigio (rampe di 2 e 1 stop). Lì la tinta è rumore o clipping, non una dominante.
+
+Un errore di 100 K su 5600 K si vede appena, come in CineMatch; 300 K si vedono bene, e il colore
+cresce con l'errore. Il numero in Kelvin non si legge dalla vista: la vista dice *da che parte*
+muovere lo slider e quando fermarsi.
 
 ### Dove sta nella pipeline
 
@@ -213,18 +222,10 @@ timeline — DaVinci WG/Intermediate, ACEScct, Rec.709. Verificato in `tests/tes
 | | CineMatch | S-Log MetaRaw |
 |---|---|---|
 | Viste esposizione | 2 (grigio medio, incarnato), un colore ciascuna | 1, sei bande ARRI insieme |
-| Viste bilanciamento | 2, classificazione per tinta HSL | 2, deviazione colorimetrica in uv |
-| Lettura | qualitativa: "c'è dominante / non c'è" | quantitativa: Kelvin e unità di tint |
-| Su contenuto saturo | la satura 1×, i neutri 8×: il neutro spicca | tutto va in banda per magnitudine |
-| Neutro appare | grigio (assenza di colore) | bianco (banda centrale) |
+| Viste bilanciamento | 2, immagine grigia, tinte canoniche, quasi-neutri 8× | uguali |
+| Come sceglie l'asse | tinta HSL del pixel | deviazione in uv sull'inverso della risposta degli slider |
+| Neutro appare | grigio | grigio |
 | Dove sta | sopra gli slider, booleana + menu | sopra gli slider, tre booleane con icona |
-
-Il punto forte di CineMatch è la robustezza su scene sature: esaltando i quasi-neutri di
-8× e lasciando stare i colori, il grigio salta all'occhio. Il punto forte di questa
-implementazione è che dice **di quanto** sei fuori. Non ho trovato nessuno strumento, in
-tutta la ricerca, che faccia una mappa colorimetrica CCT/Duv per pixel: la cosa più vicina
-sono i DCTL MONONODES (*Highlight Neutrals*, *Balance*), che restano classificatori di
-tinta. Sembra terreno non occupato.
 
 ---
 
@@ -235,8 +236,9 @@ tinta. Sembra terreno non occupato.
 2. **Esposizione**: accendi la vista, punta il grigio medio o l'incarnato, muovi
    *Exposure* finché la zona giusta diventa verde (grigio 18%) o rosa (una fermata sopra).
 3. **Temperatura**: accendi la vista, trova una superficie che deve essere neutra, muovi
-   *Color Temp* finché diventa bianca.
-4. **Tinta**: idem con *Tint*. Un paio di passate alternate e converge.
+   *Color Temp* finché resta grigia (blu: alza, arancio: abbassa).
+4. **Tinta**: idem con *Tint* (verde: alza, magenta: abbassa). Un paio di passate alternate e
+   converge.
 5. Spegni la vista prima di renderizzare.
 
 **Attenzione**: la vista sostituisce l'immagine, non è un overlay — in Resolve un plugin

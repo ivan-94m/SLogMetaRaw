@@ -230,7 +230,8 @@ TAGS = {
     0x8116: ('gamma_for_cdl', 'Gamma for CDL', _u, F_STR),
     0x8119: ('exposure_index_2', 'Exposure index (32-bit)', _u, F_STR),
     0x811e: ('iso_2', 'ISO sensitivity (32-bit)', _u, F_STR),
-    0x811f: ('tint', 'Tint Correction', _s, F_STR),
+    # hundredths: an FX6 set to 15.17 in the menu (and in Catalyst Browse) records 1517
+    0x811f: ('tint', 'Tint Correction', lambda d: _s(d) / 100.0, f_num('%.2f')),
     0x8120: ('luminance_code_range', 'Luminance code range', _enum(LUMA_RANGE), F_STR),
     # GPS
     0x8500: ('gps_version', 'GPS version', lambda d: '.'.join(str(b) for b in d[:4]), F_STR),

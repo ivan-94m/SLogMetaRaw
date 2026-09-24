@@ -1,25 +1,30 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Clean up a developer install (symlinked plugin, per-user launcher and lib_path) so the
-# system install is the only copy Resolve and the plugin use.
-PLUGIN="/Library/OFX/Plugins/SLogMetaRaw.ofx.bundle"
-if [[ -L "$PLUGIN" ]]; then rm -f "$PLUGIN"; fi
-# previous name of this project (SonyMeta), so nothing is left behind after the rename
-rm -rf "/Library/OFX/Plugins/SonyMetaRAW.ofx.bundle" "/Library/Application Support/SonyMeta" \
-       "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/SonyMeta.py"
-rm -f "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/SLogMetaRaw.py"
-pkgutil --forget com.sonymeta.pkg >/dev/null 2>&1
-CONSOLE_USER="$(stat -f%Su /dev/console 2>/dev/null)"
-if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" ]]; then
-  HOME_DIR="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p')"
-  if [[ -n "$HOME_DIR" ]]; then
-    SCRIPTS_DIR="$HOME_DIR/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility"
-    rm -f "$SCRIPTS_DIR/S-Log MetaRaw.py" "$SCRIPTS_DIR/SLogMetaRaw.py" "$SCRIPTS_DIR/SonyMeta.py"
-    rm -f "$HOME_DIR/Library/Application Support/SLogMetaRaw/lib_path"
-    # The OpenFX reader prefers a per-user library over the system library. Remove
-    # that obsolete copy too, so the node and the menu script use the same version.
-    rm -rf "$HOME_DIR/Library/Application Support/SLogMetaRaw/lib/slogmetaraw"
-    rm -rf "$HOME_DIR/Library/Application Support/SonyMeta"
+# Every install is a clean one: the previous plugin and library go entirely (a package only adds and replaces files,
+# so a stale file of an older version would otherwise stay inside the bundle), and so do developer installs
+# (symlinked plugin, per-user launcher, library and lib_path), the old SonyMeta name and the test probe.
+# The metadata cache stays: its records carry a version and older ones are read again.
+# Tests only: SLOGMETARAW_ROOT (prefix of the system paths), SLOGMETARAW_HOME (the user's home).
+ROOT="${SLOGMETARAW_ROOT:-}"
+UTIL="Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility"
+rm -rf "$ROOT/Library/OFX/Plugins/SLogMetaRaw.ofx.bundle" "$ROOT/Library/OFX/Plugins/SLogMetaRawProbe.ofx.bundle" \
+       "$ROOT/Library/OFX/Plugins/SonyMetaRAW.ofx.bundle" \
+       "$ROOT/Library/Application Support/SLogMetaRaw/lib" "$ROOT/Library/Application Support/SonyMeta" \
+       "$ROOT/$UTIL/S-Log MetaRaw.py" "$ROOT/$UTIL/SLogMetaRaw.py" "$ROOT/$UTIL/SonyMeta.py"
+[[ -z "$ROOT" ]] && pkgutil --forget com.sonymeta.pkg >/dev/null 2>&1
+HOME_DIR="${SLOGMETARAW_HOME:-}"
+if [[ -z "$HOME_DIR" ]]; then
+  CONSOLE_USER="$(stat -f%Su /dev/console 2>/dev/null)"
+  if [[ -n "$CONSOLE_USER" && "$CONSOLE_USER" != "root" ]]; then
+    HOME_DIR="$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null | sed -n 's/^NFSHomeDirectory: //p')"
   fi
+fi
+if [[ -n "$HOME_DIR" ]]; then
+  SUPPORT="$HOME_DIR/Library/Application Support/SLogMetaRaw"
+  rm -f "$HOME_DIR/$UTIL/S-Log MetaRaw.py" "$HOME_DIR/$UTIL/SLogMetaRaw.py" "$HOME_DIR/$UTIL/SonyMeta.py"
+  # the OpenFX reader prefers lib_path and a per-user library over the system one: both would shadow this install
+  rm -rf "$SUPPORT/lib_path" "$SUPPORT/lib" "$SUPPORT/pycache" "$HOME_DIR/Library/Application Support/SonyMeta"
+  # Resolve caches every plugin's panel: a stale cache shows the old panel and hides new nodes until rebuilt
+  rm -f "$HOME_DIR/Library/Application Support/Blackmagic Design/DaVinci Resolve/OFXPluginCacheV2.xml"
 fi
 exit 0

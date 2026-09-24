@@ -36,6 +36,6 @@ def shot_values(meta):
     if not k:
         k = PRESET_KELVIN.get(meta.get('lighting_preset'), 5600)
         estimated = True
-    tint = meta.get('tint') or 0
+    tint = max(-99.0, min(99.0, float(meta.get('tint') or 0)))   # the camera's own range
     ei = meta.get('exposure_index') or meta.get('iso') or 800
     return int(k), float(tint), int(ei), estimated
