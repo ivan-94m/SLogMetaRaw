@@ -181,7 +181,7 @@ def read_package(f, pos, want_sps=False):
         elif _is_system(key) or key == first or _is_partition(key):
             break  # the next content package
         if key[:13] == ANC_KEY:
-            payload = _anc_value(c.read(vpos, length))
+            payload = _anc_value(c.read(vpos, min(length, KLV_READ)))
             if payload:
                 return payload, sps
         elif _is_essence(key) and key[12] in (0x05, 0x15):
@@ -257,7 +257,10 @@ def find_rtmd(f, pos, window=WINDOW):
     base = pos
     start = 0
     while len(buf) < window and base + len(buf) < f.size:
-        buf += f.read_at(base + len(buf), CHUNK)
+        chunk = f.read_at(base + len(buf), CHUNK)
+        if not chunk:
+            break   # the file got shorter than when it was opened
+        buf += chunk
         while True:
             i = buf.find(ANC_KEY, start)
             if i < 0:
@@ -281,8 +284,8 @@ def find_rtmd(f, pos, window=WINDOW):
 SPS_RE = re.compile(rb'\x00\x00\x01(?:([\x07\x27\x47\x67])|(\x42\x01))')
 
 
-def _sps_in(buf):
-    m = SPS_RE.search(buf)
+def _sps_in(buf, pos=0):
+    m = SPS_RE.search(buf, pos)
     if m:
         j = buf.find(b'\x00\x00\x01', m.start() + 4)
         if j > 0:
@@ -298,8 +301,12 @@ def find_sps(f, window=8 * 1024 * 1024, start=0):
     """
     buf = b''
     while len(buf) < window and start + len(buf) < f.size:
-        buf += f.read_at(start + len(buf), CHUNK)
-        found = _sps_in(buf)
+        chunk = f.read_at(start + len(buf), CHUNK)
+        if not chunk:
+            break
+        seen = len(buf)
+        buf += chunk
+        found = _sps_in(buf, max(0, seen - 4096))   # an SPS is far shorter than 4 KB
         if found[1]:
             return found
     return None, None

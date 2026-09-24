@@ -30,19 +30,9 @@ says that *Auto* decides "based on the codec of the source media" — no flags, 
 per-camera table. When it picks the wrong one for an S-Log clip the log decode
 downstream is fed a mis-scaled curve, and the error is largest in the shadows.
 
-What this module does
----------------------
-- ``required_level(meta)``  the scale the clip's own gamma is defined on.
-- ``declared_level(meta)``  what the file itself declares (codec VUI flag, MP4
-  ``colr``/nclx box, MXF CDCI reference levels, Sony RTMD 0x8120).
-- ``decide(meta, host)``    the affine (gain, offset) that takes the image from
-  the scale Resolve put it on to the scale the gamma needs.
-
-``host`` is read from Resolve itself (``MediaPoolItem.GetClipProperty('Data
-Level')`` -> 'Auto' | 'Full' | 'Video'), so the correction is a known difference
-rather than a guess. While the attribute is still 'Auto' the resolved value is not
-observable from any API, so no correction is applied and the caller is told to
-make it explicit — which the script does for you.
+``host`` is Resolve's own clip attribute ('Auto' | 'Full' | 'Video'). While it is
+'Auto' the resolved scale is not observable from any API, so nothing is corrected
+and the script sets it explicitly.
 
 References for the tables below are collected in docs/DATA_LEVELS.md.
 """

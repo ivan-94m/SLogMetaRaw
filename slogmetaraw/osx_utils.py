@@ -1,14 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Small macOS helpers for the S-Log MetaRaw window.
-
-- display_bounds(): main display rectangle (top-left origin)
-- resolve_window_bounds(): bounds of the largest on-screen window owned by
-  DaVinci Resolve, or None
-- play_sound(ok): system notification sound, fire-and-forget
-
-Everything degrades gracefully (None / no-op on failure): the script must
-never depend on these helpers to work.
-"""
+"""Small macOS helpers for the S-Log MetaRaw window: None / no-op on failure, never required."""
 import ctypes
 import ctypes.util
 import os

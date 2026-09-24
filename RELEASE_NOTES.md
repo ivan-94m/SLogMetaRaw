@@ -1,5 +1,41 @@
 # Changelog
 
+## S-Log MetaRaw 2.0.1
+
+Stabilità e prestazioni. Nessun controllo cambia, nessun valore salvato cambia, l'immagine resta identica.
+
+### Plugin
+
+- **Detail su GPU parte subito**: la libreria Metal si compila una volta sola per nodo, non una volta per kernel
+  (11–17 compilazioni al primo frame, con il render del Develop fermo in attesa).
+- **Detail su CPU non rialloca più ogni frame** i piani di lavoro (100–300 MB per frame in UHD): si riusano, e al massimo
+  due set restano in memoria per tutto il progetto, qualunque sia il numero di nodi.
+- **Niente più crash possibili all'apertura del progetto**: i parametri del Detail si leggono sul thread principale, non
+  per la prima volta durante il render mentre il pannello li sta toccando.
+- **GPU più vecchie (Mac Intel/AMD)**: la dimensione dei gruppi Metal rispetta il limite del kernel, invece di 16×16
+  fisso.
+- **Immagini con geometria inattesa** (bordi o passo di riga diversi tra ingresso e uscita) vengono rifiutate invece di
+  scrivere fuori dal buffer.
+
+### Lettura dei metadata
+
+- **Nessun blocco su file troncati o corrotti**: una scansione MXF su un file che si accorcia, o una tabella `stsc`
+  danneggiata, giravano all'infinito al 100% di CPU.
+- **Un XML NRT danneggiato non fa più perdere la clip**: si perdono solo i suoi campi, i dati per-frame restano.
+- **Box MP4 corti o mancanti** (`mdhd`, `stts`, `stsz`, `stco`/`co64`, `iinf`, `hvcC`/`avcC`/`colr`) non fanno più
+  fallire la lettura.
+- **Letture limitate**: una lunghezza corrotta nel file non può più caricare gigabyte in memoria.
+- `iloc` versione 2 e `infe` versione 3 letti con i campi a 32 bit, come da ISO/IEC 14496-12.
+- La ricerca della SPS negli MXF senza indice non riscansiona più tutto il buffer a ogni blocco.
+
+### Installazione e repository
+
+- Script d'installazione, `preinstall`/`postinstall` e disinstallatore di nuovo eseguibili in git; il disinstallatore
+  nel DMG si apre con un doppio clic.
+- Tolti dal repository gli artefatti di build (oggetti, binari di test, cache Python, staging dell'installer); aggiunto
+  `.gitignore`.
+- Nuovi test su clip troncate e corrotte; tolto un test della matematica dei toni 1.x che non esiste più.
+
 ## S-Log MetaRaw 2.0.0
 
 Una versione maggiore, perché cambiano insieme la matematica, i controlli e il codice:

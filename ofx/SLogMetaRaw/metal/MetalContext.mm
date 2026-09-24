@@ -20,20 +20,28 @@ id<MTLComputePipelineState> metalPipeline(id<MTLDevice> device, const char* sour
     if (it != cache.end()) return it->second;
     if (failures[key] >= 1) return nil;   // compiled once and failed: the source will not change
 
-    MTLCompileOptions* options = [MTLCompileOptions new];
-    options.languageVersion = MTLLanguageVersion2_4;   // the oldest macOS we ship for (12)
-    if (@available(macOS 15.0, *)) {
-        options.mathMode = MTLMathModeSafe;
-        options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsPrecise;
-    } else {
+    // one library per source: every kernel of a node comes from the same text, compiled once
+    static std::map<std::pair<id<MTLDevice>, const char*>, id<MTLLibrary>> libraries;
+    const auto libKey = std::make_pair(device, source);
+    auto lib = libraries.find(libKey);
+    id<MTLLibrary> library = lib != libraries.end() ? lib->second : nil;
+    NSError* err = nil;
+    if (!library) {
+        MTLCompileOptions* options = [MTLCompileOptions new];
+        options.languageVersion = MTLLanguageVersion2_4;   // the oldest macOS we ship for (12)
+        if (@available(macOS 15.0, *)) {
+            options.mathMode = MTLMathModeSafe;
+            options.mathFloatingPointFunctions = MTLMathFloatingPointFunctionsPrecise;
+        } else {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-        options.fastMathEnabled = NO;
+            options.fastMathEnabled = NO;
 #pragma clang diagnostic pop
+        }
+        const std::string text = std::string(kMetalPrelude) + source;
+        library = [device newLibraryWithSource:@(text.c_str()) options:options error:&err];
+        if (library) libraries[libKey] = library;
     }
-    NSError* err = nil;
-    const std::string text = std::string(kMetalPrelude) + source;
-    id<MTLLibrary> library = [device newLibraryWithSource:@(text.c_str()) options:options error:&err];
     id<MTLComputePipelineState> pipeline = nil;
     if (library) {
         id<MTLFunction> fn = [library newFunctionWithName:@(function)];

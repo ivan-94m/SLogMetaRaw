@@ -73,9 +73,7 @@ find "$R" -name ".DS_Store" -delete
 xattr -rc "$R"
 
 echo "4/6 pacchetto"
-# preinstall and postinstall must be executable or the installer stops with
-# "the file does not exist" - which is what execve reports when it cannot run
-# them. A checkout that lost the mode bit would otherwise ship a broken package.
+# a checkout that lost the mode bit would ship a package whose scripts execve cannot run
 chmod +x "$PKG_DIR/scripts/preinstall" "$PKG_DIR/scripts/postinstall"
 pkgbuild --root "$R" --install-location / --identifier com.slogmetaraw.pkg --version "$VERSION" \
          --scripts "$PKG_DIR/scripts" "$BUILD/SLogMetaRaw-component.pkg" > "$BUILD/pkgbuild.log" 2>&1
@@ -95,6 +93,7 @@ swift "$ROOT/tools/set_icon.swift" "$ROOT/assets/SLogMetaRaw.icns" "$BUILD/dmg/I
 
 echo "5/6 disinstallatore"
 cp "$PKG_DIR/Disinstalla S-Log MetaRaw.command" "$BUILD/dmg/"
+chmod +x "$BUILD/dmg/Disinstalla S-Log MetaRaw.command"   # Finder opens it only if executable
 cp "$ROOT/assets/SLogMetaRaw.icns" "$BUILD/dmg/.VolumeIcon.icns"
 xattr -c "$BUILD/dmg/Guida S-Log MetaRaw (italiano).pdf" "$BUILD/dmg/S-Log MetaRaw Guide (english).pdf" \
          "$BUILD/dmg/Disinstalla S-Log MetaRaw.command" "$BUILD/dmg/.VolumeIcon.icns"
@@ -107,5 +106,6 @@ MNT="$(hdiutil attach -nobrowse -noverify -noautoopen "$BUILD/rw.dmg" | awk -F'\
 xcrun SetFile -a C "$MNT" 2>/dev/null || true   # show .VolumeIcon.icns as the disk icon
 hdiutil detach -quiet "$MNT"
 hdiutil convert -quiet "$BUILD/rw.dmg" -format UDZO -o "$DMG"
+rm -f "$BUILD/rw.dmg"
 swift "$ROOT/tools/set_icon.swift" "$ROOT/assets/SLogMetaRaw.icns" "$DMG"
 echo "Creato: $DMG"

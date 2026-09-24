@@ -1,9 +1,0 @@
-write: Permission denied
-write: Permission denied
-write: Permission denied
-write: Permission denied
-pkgbuild: Inferring bundle components from contents of /Users/ivan/Lavoro/Programmi/SLogMetaRaw-GitHub/SLogMetaRaw-1.1.0/build/installer/root
-pkgbuild: Adding component at Library/OFX/Plugins/SLogMetaRaw.ofx.bundle
-pkgbuild: Adding top-level preinstall script
-pkgbuild: Adding top-level postinstall script
-pkgbuild: Wrote package to /Users/ivan/Lavoro/Programmi/SLogMetaRaw-GitHub/SLogMetaRaw-1.1.0/build/installer/SLogMetaRaw-component.pkg

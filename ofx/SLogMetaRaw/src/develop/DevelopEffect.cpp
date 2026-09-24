@@ -6,6 +6,7 @@
 #include <memory>
 
 #include "DevelopProcessor.h"
+#include "../common/ImageLayout.h"
 #include "ToneParams.h"
 
 const double kPresetKelvin[] = { 0.0, 5600.0, 6500.0, 7500.0, 3200.0, 4000.0, 5500.0 };
@@ -172,8 +173,13 @@ void DevelopEffect::render(const OFX::RenderArguments& p_Args)
         OFX::throwSuiteStatusException(kOfxStatErrUnsupported);
     std::unique_ptr<OFX::Image> dst(m_DstClip->fetchImage(p_Args.time));
     std::unique_ptr<OFX::Image> src(m_SrcClip->fetchImage(p_Args.time));
-    if (!dst || !src || src->getPixelDepth() != dst->getPixelDepth() || src->getPixelComponents() != dst->getPixelComponents())
+    if (!dst || !src) OFX::throwSuiteStatusException(kOfxStatErrValue);
+    if (src->getPixelDepth() != dst->getPixelDepth() || src->getPixelComponents() != dst->getPixelComponents())
         OFX::throwSuiteStatusException(kOfxStatErrValue);
+    // the Metal kernel walks dst with the src geometry; the CPU path addresses each image on its own
+#ifdef __APPLE__
+    if (p_Args.isEnabledMetalRender && !sameLayout(*src, *dst)) OFX::throwSuiteStatusException(kOfxStatErrImageFormat);
+#endif
     DevelopParams params;
     buildParams(p_Args.time, params);
     DevelopProcessor processor(*this);

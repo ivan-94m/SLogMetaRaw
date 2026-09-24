@@ -288,7 +288,7 @@ def parse_sample_entry(fourcc, entry):
                 info['colr_transfer'] = TRANSFER.get(t, str(t))
                 info['colr_matrix'] = MATRIX.get(m, str(m))
                 info['colr_full_range'] = bool(body[10] >> 7)
-        except (IndexError, ValueError) as exc:
+        except (IndexError, ValueError, struct.error) as exc:
             info['parse_error'] = '%s: %s' % (typ.decode('latin1'), exc)
         pos += size
     return info

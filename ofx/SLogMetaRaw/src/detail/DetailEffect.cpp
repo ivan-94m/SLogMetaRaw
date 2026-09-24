@@ -3,6 +3,8 @@
 
 #include <cstdio>
 #include <memory>
+#include <mutex>
+#include <vector>
 
 #include "ofxColour.h"
 #include "ofxsMultiThread.h"
@@ -10,6 +12,7 @@
 #include "DetailPasses.h"
 #include "../common/ClipCache.h"
 #include "../common/ColourSpaces.h"
+#include "../common/ImageLayout.h"
 #include "../common/ZoneParams.h"
 
 static const char* const kIntensities[] = { "localContrast", "localHighlights", "localShadows",
@@ -31,6 +34,18 @@ DetailEffect::DetailEffect(OfxImageEffectHandle p_Handle)
     } catch (...) {
         fprintf(stderr, "S-Log MetaRaw Detail: nodo disattivato, parametro mancante\n");
         return;
+    }
+    try {   // fetched here, on the main thread: a first fetch on a render thread races with the UI
+        for (const char* n : kIntensities) (void)getParam(n);
+        for (const char* n : { "preserveDetail", "detailRadius", "edgeThreshold", "noiseThreshold", "clarityCenter",
+                               "hazeLevel", "hazeWarmth", "localWhite", "viewGain", "viewBase" })
+            (void)getParam(n);
+        static const char* const fields[] = { "Exp", "Range", "Falloff" };
+        if (paramExists("localZonePivot")) (void)getParam("localZonePivot");
+        for (int z = 0; z < kZoneCount; ++z)
+            for (const char* f : fields)
+                if (paramExists(zoneParamName("localZone", z, f))) (void)getParam(zoneParamName("localZone", z, f));
+    } catch (...) {
     }
     try {
         if (m_SettingsVersion->getValue() == 0) m_SettingsVersion->setValue(kDetailSettingsVersion);
@@ -181,6 +196,35 @@ private:
     int m_N;
     const std::function<void(int, int)>& m_Fn;
 };
+
+// Working planes shared by every Detail node: reused between frames instead of reallocated, and at
+// most kKeep sets stay allocated however many nodes the project has.
+class ScratchLease
+{
+public:
+    ScratchLease()
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        if (!pool().empty()) {
+            m_S = std::move(pool().back());
+            pool().pop_back();
+        } else {
+            m_S.reset(new DetailScratch());
+        }
+    }
+    ~ScratchLease()
+    {
+        std::lock_guard<std::mutex> lock(mutex());
+        if (pool().size() < kKeep) pool().push_back(std::move(m_S));
+    }
+    DetailScratch& operator*() { return *m_S; }
+
+private:
+    static const size_t kKeep = 2;
+    static std::mutex& mutex() { static std::mutex m; return m; }
+    static std::vector<std::unique_ptr<DetailScratch>>& pool() { static std::vector<std::unique_ptr<DetailScratch>> p; return p; }
+    std::unique_ptr<DetailScratch> m_S;
+};
 }
 
 SMDetailControls DetailEffect::readControls(double t)
@@ -223,6 +267,7 @@ void DetailEffect::render(const OFX::RenderArguments& p_Args)
     if (!dst || !src) OFX::throwSuiteStatusException(kOfxStatErrValue);
     const OfxRectI b = src->getBounds();
     const int W = b.x2 - b.x1, H = b.y2 - b.y1;
+    if (!sameLayout(*src, *dst)) OFX::throwSuiteStatusException(kOfxStatErrImageFormat);
     int space = 8, gamma = 9;
     resolveInput(space, gamma);
     // The whole frame arrives (no tiles), so its height is the reference of every radius: the same
@@ -242,7 +287,7 @@ void DetailEffect::render(const OFX::RenderArguments& p_Args)
         HostThreads threads(n, fn);
         threads.multiThread();
     };
-    DetailScratch scratch;
+    ScratchLease scratch;
     detailRenderCPU(p, static_cast<const float*>(src->getPixelData()), (size_t)src->getRowBytes() / 4,
-                    static_cast<float*>(dst->getPixelData()), (size_t)dst->getRowBytes() / 4, parallel, scratch);
+                    static_cast<float*>(dst->getPixelData()), (size_t)dst->getRowBytes() / 4, parallel, *scratch);
 }
