@@ -1,14 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Connection to the local DaVinci Resolve scripting server and single-clip write.
 
-Used by ``python -m slogmetaraw --to-resolve <path>``, the child process that the
-OpenFX plugin starts when its "Rileggi metadata" button is pressed. The child
-runs under ResolvePython (isolated mode), so DaVinciResolveScript is imported
-lazily, only when a connection is actually attempted.
-
-Resolve 21.x can refuse scriptapp('Resolve') on 127.0.0.1 while accepting an
-address assigned to one of the Mac's interfaces (same behaviour documented in
-the launcher), so the fallback tries the local IPv4 addresses read from ifconfig.
+Used by ``--to-resolve``, the child the plugin starts for "Rileggi metadata". Resolve 21.x can
+refuse 127.0.0.1 while accepting an interface address, so the fallback tries the local IPv4s.
 """
 
 import os
@@ -40,11 +34,7 @@ def _local_ipv4_addresses():
 
 
 def connect():
-    """A connected Resolve object, or raise RuntimeError with a user-readable reason.
-
-    The caller never touches DaVinciResolveScript itself: under ResolvePython the
-    module lives in the runtime's own lib/modules, under a plain Python it does
-    not exist at all."""
+    """A connected Resolve object, or raise RuntimeError with a user-readable reason."""
     try:
         import DaVinciResolveScript as bmd
     except Exception as exc:

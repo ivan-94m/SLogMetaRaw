@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "MetalKernels.h"
 
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -78,7 +79,10 @@ public:
     void grid2(id<MTLComputePipelineState> ps, int w, int h)
     {
         if (!ps) return;
-        [m_Enc dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)];
+        // heavy kernels can allow fewer than 256 threads per group on older GPUs
+        const NSUInteger tw = ps.threadExecutionWidth;
+        const NSUInteger th = std::min<NSUInteger>(16, std::max<NSUInteger>(1, ps.maxTotalThreadsPerThreadgroup / tw));
+        [m_Enc dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(tw, th, 1)];
     }
     void grid1(id<MTLComputePipelineState> ps, int n)
     {

@@ -15,6 +15,7 @@ import os
 import re
 import struct
 import time
+import xml.etree.ElementTree as ET
 
 from . import codec, datalevel, mp4, mxf, nrt, rtmd
 
@@ -25,6 +26,7 @@ CHANGE_KEYS = ('iris_fnumber', 'focus_distance_m', 'focal_length_mm', 'shutter_s
                'shutter_angle', 'iso', 'exposure_index', 'master_gain_db', 'white_balance_k',
                'tint', 'nd_filter', 'awb_mode')
 PARTIAL_READ = 2048  # bytes per sampled rtmd frame (lens + camera sets come first)
+FIRST_READ = 1 << 20  # the first frame is read whole, but a damaged size must not pull in gigabytes
 FULL_SAMPLES = 24    # a record sampled this finely is complete (the script's reading)
 MXF_WINDOWS = 12     # byte-scan windows when an MXF has no usable index
 
@@ -168,13 +170,22 @@ def _audio_info(track):
             'audio_channels': channels, 'audio_bits': bits, 'audio_rate': rate}
 
 
+def _merge_nrt(out, xml):
+    """A damaged NRT XML costs its own fields, not the rtmd that is still readable."""
+    try:
+        out['meta'].update(nrt.parse(xml))
+    except (ET.ParseError, ValueError, TypeError, LookupError) as exc:
+        out['warnings'].append('NRT XML illeggibile: %s' % exc)
+        return
+    out['nrt_source'] = 'sidecar' if out.get('sidecar') else 'embedded'
+
+
 def _read_mp4(f, out, interval, max_samples, deadline, lut):
     m = mp4.MP4(f)
     meta = out['meta']
     xml = out.pop('_sidecar_xml', None) or m.meta_xml
     if xml:
-        meta.update(nrt.parse(xml))
-        out['nrt_source'] = 'sidecar' if out.get('sidecar') else 'embedded'
+        _merge_nrt(out, xml)
     if lut and 'Look Control data' in m.items:
         out['embedded_lut'] = m.item('Look Control data')
     if m.items.get('Lens profile'):
@@ -185,13 +196,14 @@ def _read_mp4(f, out, interval, max_samples, deadline, lut):
         meta.update({'v_' + k: v for k, v in info.items()})
         meta['frames'] = video.sample_count()
         stts = video.tables.get(b'stts')
-        if stts and video.timescale:
+        if stts and len(stts) >= 16 and video.timescale:
             delta = struct.unpack('>I', stts[12:16])[0]
             meta['fps'] = video.timescale / delta if delta else None
         if video.timescale and video.duration:
             secs = video.duration / video.timescale
             stsz = video.tables.get(b'stsz', b'')
             fixed, n = struct.unpack('>II', stsz[4:12]) if len(stsz) >= 12 else (0, 0)
+            n = n if fixed else min(n, (len(stsz) - 12) // 4)
             total = fixed * n if fixed else sum(struct.unpack('>%dI' % n, stsz[12:12 + 4 * n]))
             meta['duration_s'] = secs
             meta['bitrate_mbps'] = total * 8 / secs / 1e6 if secs else None
@@ -211,7 +223,7 @@ def _read_mp4(f, out, interval, max_samples, deadline, lut):
         if i not in offsets:
             return None
         size = track.sample_size(i)
-        entries = rtmd.decode_mp4_sample(f.read_at(offsets[i], size if i == 0 else min(size, PARTIAL_READ)))
+        entries = rtmd.decode_mp4_sample(f.read_at(offsets[i], min(size, FIRST_READ if i == 0 else PARTIAL_READ)))
         if i == 0:
             out['rtmd'] = entries
         return rtmd.values(entries)
@@ -225,7 +237,7 @@ def _parse_sps(meta, kind, sps):
         try:
             info = codec.parse_avc_sps(sps) if kind == 'avc' else codec.parse_hevc_sps(sps)
             meta.update({'v_' + k: v for k, v in info.items()})
-        except (IndexError, ValueError):
+        except (IndexError, ValueError, struct.error):
             pass
 
 
@@ -238,8 +250,7 @@ def _read_mxf(f, out, interval, max_samples, deadline):
         f.preload(0, lay['essence'] if lay['essence'] <= mxf.HEAD_MAX else head)
     xml = out.pop('_sidecar_xml', None) or mxf.find_nrt_xml(f, head)
     if xml:
-        meta.update(nrt.parse(xml))
-        out['nrt_source'] = 'sidecar' if out.get('sidecar') else 'embedded'
+        _merge_nrt(out, xml)
     fps = _fps_value(meta.get('format_fps')) or 25.0
     frames = meta.get('duration_frames') or 0
     meta['fps'] = fps
@@ -321,8 +332,11 @@ def _normalise(out):
     frames = meta.get('duration_frames') or meta.get('frames')
     if meta.get('start_tc') and frames:
         # End TC as Resolve/Catalyst show it (exclusive) and duration as timecode
-        meta['end_tc'] = frames_to_tc(tc_to_frames(meta['start_tc'], tc_fps) + frames, tc_fps)
-        meta['duration_tc'] = frames_to_tc(frames, tc_fps)
+        try:
+            meta['end_tc'] = frames_to_tc(tc_to_frames(meta['start_tc'], tc_fps) + frames, tc_fps)
+            meta['duration_tc'] = frames_to_tc(frames, tc_fps)
+        except (ValueError, TypeError):
+            pass   # a start timecode that is not HH:MM:SS:FF
     for e in out.get('rtmd', []):
         if e['key'] and e['value'] is not None and e['key'] not in meta:
             meta[e['key']] = e['value']

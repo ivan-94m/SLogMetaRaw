@@ -73,6 +73,8 @@ def iter_boxes(f, start, end):
         size, typ = struct.unpack('>I4s', hdr[:8])
         hlen = 8
         if size == 1:
+            if len(hdr) < 16:
+                return
             size = struct.unpack('>Q', hdr[8:16])[0]
             hlen = 16
         elif size == 0:
@@ -107,7 +109,7 @@ class Track:
     # -- sample table helpers -------------------------------------------
     def sample_count(self):
         stsz = self.tables.get(b'stsz')
-        if not stsz:
+        if not stsz or len(stsz) < 12:
             return 0
         return struct.unpack('>I', stsz[8:12])[0]
 
@@ -121,19 +123,19 @@ class Track:
     def chunk_offsets(self):
         if b'stco' in self.tables:
             d = self.tables[b'stco']
-            n = struct.unpack('>I', d[4:8])[0]
+            n = min(struct.unpack('>I', d[4:8])[0], (len(d) - 8) // 4)
             return list(struct.unpack('>%dI' % n, d[8:8 + 4 * n]))
         d = self.tables[b'co64']
-        n = struct.unpack('>I', d[4:8])[0]
+        n = min(struct.unpack('>I', d[4:8])[0], (len(d) - 8) // 8)
         return list(struct.unpack('>%dQ' % n, d[8:8 + 8 * n]))
 
     def sample_offsets(self, wanted):
         """Return {sample_index: file_offset} for the requested sample indices."""
         wanted = sorted(set(i for i in wanted if 0 <= i < self.sample_count()))
-        if not wanted:
+        if not wanted or b'stsc' not in self.tables or not (b'stco' in self.tables or b'co64' in self.tables):
             return {}
         stsc = self.tables[b'stsc']
-        n = struct.unpack('>I', stsc[4:8])[0]
+        n = min(struct.unpack('>I', stsc[4:8])[0], (len(stsc) - 8) // 12)
         runs = [struct.unpack('>III', stsc[8 + 12 * i:20 + 12 * i]) for i in range(n)]
         chunks = self.chunk_offsets()
         out = {}
@@ -142,7 +144,9 @@ class Track:
         sample = 0
         w = 0
         for ri, (first_chunk, per_chunk, _desc) in enumerate(runs):
-            last_chunk = runs[ri + 1][0] - 1 if ri + 1 < len(runs) else len(chunks)
+            last_chunk = min(runs[ri + 1][0] - 1 if ri + 1 < len(runs) else len(chunks), len(chunks))
+            if per_chunk == 0 or first_chunk < 1:
+                continue   # a damaged run: skipping it must not walk billions of empty chunks
             for c in range(first_chunk, last_chunk + 1):
                 if w >= len(wanted):
                     return out
@@ -170,9 +174,9 @@ def _parse_trak(f, trak):
                 walk(bp + bhl, bp + bs)
             elif t == b'mdhd':
                 d = f.read_at(bp + bhl, bs - bhl)
-                if d[0] == 1:
+                if len(d) >= 32 and d[0] == 1:
                     tr.timescale, tr.duration = struct.unpack('>IQ', d[20:32])
-                else:
+                elif len(d) >= 20:
                     tr.timescale, tr.duration = struct.unpack('>II', d[12:20])
             elif t == b'hdlr' and tr.handler is None:
                 # QuickTime repeats hdlr inside minf (data handler 'alis'): the media one comes first
@@ -229,13 +233,18 @@ class MP4:
                 d = f.read_at(p + hl, s - hl)
                 ver = d[0]
                 q = 6 if ver == 0 else 8
-                while q + 8 <= len(d):
+                while q + 14 <= len(d):
                     size = struct.unpack('>I', d[q:q + 4])[0]
                     if size < 8:
                         break
                     e = d[q + 8:q + size]
-                    ev = d[q + 8]
-                    if ev >= 2:
+                    if len(e) < 8:
+                        break
+                    ev = e[0]
+                    if ev >= 3:   # 32-bit item_ID
+                        item_id = struct.unpack('>I', e[4:8])[0]
+                        name = e[14:].split(b'\0')[0]
+                    elif ev == 2:
                         item_id = struct.unpack('>H', e[4:6])[0]
                         name = e[12:].split(b'\0')[0]
                     else:
@@ -245,14 +254,14 @@ class MP4:
                     q += size
             elif t == b'iloc':
                 d = f.read_at(p + hl, s - hl)
+                if len(d) < 8:
+                    continue
                 ver = d[0]
                 sz = d[4]
                 off_size, len_size = sz >> 4, sz & 15
                 base_size = d[5] >> 4
                 idx_size = d[5] & 15 if ver in (1, 2) else 0
                 q = 6
-                count = struct.unpack('>H', d[q:q + 2])[0]
-                q += 2
 
                 def rd(n):
                     nonlocal q
@@ -260,8 +269,12 @@ class MP4:
                     q += n
                     return v
 
+                id_size = 4 if ver == 2 else 2   # ISO 14496-12: 32-bit count and item_ID in version 2
+                count = rd(id_size)
                 for _ in range(count):
-                    item_id = rd(2)
+                    if q >= len(d):
+                        break
+                    item_id = rd(id_size)
                     method = 0
                     if ver in (1, 2):
                         method = rd(2) & 15
