@@ -1,0 +1,43 @@
+param:Controls|OfxParamTypePage||||||||||||||||
+param:version|OfxParamTypePushButton|v{release}||||||||||||Clicca per controllare gli aggiornamenti|||
+param:detailInfo|OfxParamTypeString|Detail|Spaziale · escluso da Generate LUT|||0|||||||0||||
+param:rangeGroup|OfxParamTypeGroup|Gamma dinamica|||||||||||||||1
+param:viewGain|OfxParamTypeBoolean|Vista: guadagno|0|rangeGroup|||||||||0|Mostra quanto il nodo alza (arancio) o abbassa (blu) ogni zona: grigio = invariato. Bande a 0,25 / 0,5 / 1 / 2 stop||view_gain.png|
+param:viewBase|OfxParamTypeBoolean|Vista: base|0|rangeGroup|||||||||0|Mostra la base edge-aware su cui lavorano i toni locali, senza il dettaglio||view_base.png|
+param:localContrast|OfxParamTypeDouble|Local Contrast|0|rangeGroup|||-100|50|-100|50|0.1|2||Contrasto delle grandi aree attorno al grigio, a dettaglio intatto. Il Contrast del nodo principale e globale; qui il dettaglio fine resta com'e|||
+param:localHighlights|OfxParamTypeDouble|Local Highlights|0|rangeGroup|||-100|100|-100|100|0.1|2||Negativo: comprime le grandi aree luminose e tiene, anzi rinforza, la texture (a -100 il massimo registrato arriva sul Bianco di Avanzate); le luci piu compresse vanno verso il bianco. Positivo: piu stacco per aree. Grigio e toni sotto restano fermi|||
+param:localShadows|OfxParamTypeDouble|Local Shadows|0|rangeGroup|||-100|100|-100|100|0.1|2||Apre (positivo) o chiude le ombre per aree, a dettaglio intatto. 100 = 2 stop|||
+param:presenceGroup|OfxParamTypeGroup|Presenza|||||||||||||||1
+param:texture|OfxParamTypeDouble|Texture|0|presenceGroup|||-100|100|-100|100|0.1|2||Dettaglio fine (pelle, tessuti, foglie). Negativo leviga; la grana sotto la soglia rumore non sale|||
+param:clarity|OfxParamTypeDouble|Clarity|0|presenceGroup|||-100|100|-100|100|0.1|2||Contrasto locale a media scala, pesato sui mezzitoni|||
+param:dehaze|OfxParamTypeDouble|Dehaze|0|presenceGroup|||-100|100|-100|100|0.1|2||Toglie (positivo) o aggiunge velo. Il colore e il livello del velo sono in Avanzate › Velo, mai stimati fotogramma per fotogramma|||
+param:detailReset|OfxParamTypePushButton|Azzera dettaglio||presenceGroup||||||||||Riporta a zero tutti i controlli di questo nodo|||
+param:localZonesGroup|OfxParamTypeGroup|Zone locali|||||||||||||||0
+param:localZonePivot|OfxParamTypeDouble|Contrast Pivot|0|localZonesGroup|||-4|4|-3|3|0.05|2||Stop dal grigio 18% attorno a cui ruota Contrast|||
+param:localZoneBlackExp|OfxParamTypeDouble|Black Exp|0|localZonesGroup|||-6|6|-3|3|0.05|2||Esposizione in stop dei toni sotto di Range: dentro la zona e un guadagno puro, la texture resta intatta|||
+param:localZoneBlackRange|OfxParamTypeDouble|Black Range|-4|localZonesGroup|||-10|10|-8|8|0.1|2||Bordo della zona, in stop dal grigio 18%|||
+param:localZoneBlackFalloff|OfxParamTypeDouble|Black Falloff|1|localZonesGroup|||0.5|6|0.5|4|0.05|2||Larghezza della transizione in stop: oltre meta corsa si allarga da sola|||
+param:localZoneShadowExp|OfxParamTypeDouble|Shadow Exp|0|localZonesGroup|||-6|6|-3|3|0.05|2||Esposizione in stop dei toni sotto di Range: dentro la zona e un guadagno puro, la texture resta intatta|||
+param:localZoneShadowRange|OfxParamTypeDouble|Shadow Range|1|localZonesGroup|||-10|10|-8|8|0.1|2||Bordo della zona, in stop dal grigio 18%|||
+param:localZoneShadowFalloff|OfxParamTypeDouble|Shadow Falloff|2|localZonesGroup|||0.5|6|0.5|4|0.05|2||Larghezza della transizione in stop: oltre meta corsa si allarga da sola|||
+param:localZoneLightExp|OfxParamTypeDouble|Light Exp|0|localZonesGroup|||-6|6|-3|3|0.05|2||Esposizione in stop dei toni sopra di Range: dentro la zona e un guadagno puro, la texture resta intatta|||
+param:localZoneLightRange|OfxParamTypeDouble|Light Range|-1|localZonesGroup|||-10|10|-8|8|0.1|2||Bordo della zona, in stop dal grigio 18%|||
+param:localZoneLightFalloff|OfxParamTypeDouble|Light Falloff|2|localZonesGroup|||0.5|6|0.5|4|0.05|2||Larghezza della transizione in stop: oltre meta corsa si allarga da sola|||
+param:localZoneSpecularExp|OfxParamTypeDouble|Specular Exp|0|localZonesGroup|||-6|6|-3|3|0.05|2||Esposizione in stop dei toni sopra di Range: dentro la zona e un guadagno puro, la texture resta intatta|||
+param:localZoneSpecularRange|OfxParamTypeDouble|Specular Range|4|localZonesGroup|||-10|10|-8|8|0.1|2||Bordo della zona, in stop dal grigio 18%|||
+param:localZoneSpecularFalloff|OfxParamTypeDouble|Specular Falloff|1|localZonesGroup|||0.5|6|0.5|4|0.05|2||Larghezza della transizione in stop: oltre meta corsa si allarga da sola|||
+param:detailAdvancedGroup|OfxParamTypeGroup|Avanzate|||||||||||||||0
+param:preserveDetail|OfxParamTypeDouble|Preserva dettaglio|100|detailAdvancedGroup|||0|100|0|100|1|0||100 = i toni locali muovono solo le aree; 0 = come il nodo principale, puntuale|||
+param:detailRadius|OfxParamTypeDouble|Raggio (% altezza)|4|detailAdvancedGroup|||1|8|1|8|0.1|||Dimensione delle aree dei toni locali, relativa all'altezza: lo stesso look a ogni risoluzione|||
+param:edgeThreshold|OfxParamTypeDouble|Soglia bordi (EV)|0.5|detailAdvancedGroup|||0.25|1|0.25|1|0.01|||Salto di luminanza che conta come bordo: piu bassa = meno aloni, meno recupero|||
+param:noiseThreshold|OfxParamTypeDouble|Soglia rumore (EV)|0.04|detailAdvancedGroup|||0|0.15|0|0.15|0.005|||Sotto questa ampiezza il dettaglio e trattato come rumore: Texture non lo alza. 0 = nessuna protezione|||
+param:clarityCenter|OfxParamTypeDouble|Clarity: centro (EV)|0|detailAdvancedGroup|||-3|3|-3|3|0.05|||Tono, in stop dal grigio 18%, dove Clarity lavora di piu|||
+param:localWhite|OfxParamTypeDouble|Bianco (stop)|2.5|detailAdvancedGroup|||1|10|1|8|0.05|2||Dove Local Highlights -100 porta il massimo registrato, in stop sopra il grigio 18%. 2,5 = bianco Rec.709 con un CST senza tone mapping; con un DRT (ACES, AgX, DaVinci) alza a 4-5|||
+param:nodeInput|OfxParamTypeChoice|Ingresso nodo|0|detailAdvancedGroup|||||||||0|Codifica che entra nel nodo: la decodifica in luce lineare e la riscrive uguale. Automatico la chiede a Resolve, poi alla clip. Va dopo S-Log MetaRaw e prima di CST/LUT|Automatico,DaVinci WG/Intermediate,S-Gamut3.Cine/S-Log3,S-Gamut3/S-Log3,S-Gamut/S-Log2,ACES AP1/ACEScct||
+param:hazeGroup|OfxParamTypeGroup|Velo|||||||||||||||0
+param:hazeLevel|OfxParamTypeDouble|Livello velo (EV)|2|hazeGroup|||-2|6|-2|6|0.05|||Luminanza del velo in stop dal grigio 18%: da li in su Dehaze non agisce|||
+param:hazeWarmth|OfxParamTypeDouble|Colore velo|0|hazeGroup|||-100|100|-100|100|0.1|||Negativo = velo freddo (cielo, distanza), positivo = caldo (fumo, polvere)|||
+param:boundPath|OfxParamTypeString||||1||||||||0||||
+param:camSpace|OfxParamTypeInteger||-1||1||||||||0||||
+param:camGamma|OfxParamTypeInteger||-1||1||||||||0||||
+param:settingsVersion|OfxParamTypeInteger||0||1||||||||0||||

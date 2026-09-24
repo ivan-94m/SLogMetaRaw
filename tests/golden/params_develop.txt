@@ -1,0 +1,83 @@
+param:Controls|OfxParamTypePage||||||||||||||||
+param:version|OfxParamTypePushButton|v{release}||||||||||||Clicca per controllare gli aggiornamenti|||
+param:camera|OfxParamTypeString|Camera|— premi Rileggi metadata|||0|||||||0||||
+param:reload|OfxParamTypePushButton|Rileggi metadata||||||||||||Rilegge i metadata della clip dal file, li scrive nel Media Pool di Resolve e riporta i controlli ai valori di camera|||
+param:decodeUsing|OfxParamTypeChoice|Decode Using|1||||||||||0|Camera metadata: usa i valori di ripresa e blocca i controlli. Clip: puoi modificarli|Camera metadata,Clip||
+param:whiteBalance|OfxParamTypeChoice|White Balance|0||||||||||0|As shot riporta ai Kelvin di ripresa; muovendo gli slider diventa Custom|As shot,Daylight,Cloudy,Shade,Tungsten,Fluorescent,Flash,Custom||
+param:fcTemperature|OfxParamTypeBoolean|False color: temperatura|0||||||||||0|Immagine in grigio, dominanti sull'asse della temperatura colorate: blu = fredda (alza Color Temp), arancio = calda (abbassala). Muovi finche il neutro resta grigio||fc_temperature.png|
+param:colorTemp|OfxParamTypeDouble|Color Temp|5600||||2000|15000|2000|15000|10|||Temperatura in Kelvin: adattamento cromatico Bradford in luce lineare|||
+param:fcTint|OfxParamTypeBoolean|False color: tint|0||||||||||0|Immagine in grigio, dominanti sull'asse della tinta colorate: verde (alza Tint), magenta (abbassalo). Muovi finche il neutro resta grigio||fc_tint.png|
+param:tint|OfxParamTypeDouble|Tint|0||||-100|100|-100|100|0.1|||Verde/magenta, perpendicolare al luogo di Planck|||
+param:fcExposure|OfxParamTypeBoolean|False color: esposizione|0||||||||||0|Mappa le fermate attorno al grigio 18%: verde = grigio medio, rosa = incarnato (una fermata sopra), giallo = vicino al clip, rosso = clip, blu e viola = nero||fc_exposure.png|
+param:exposure|OfxParamTypeDouble|Exposure|800||||25|409600|50|25600|1|||Exposure Index: il doppio dell'EI di ripresa = +1 stop|||
+param:colorSpace|OfxParamTypeChoice|Color Space|0||||||||||0|Gamut in uscita, come un Color Space Transform. Timeline non converte|Timeline,DaVinci WG,Rec.709,Rec.2020,P3 D65,P3 D60,P3 DCI,S-Gamut,S-Gamut3,S-Gamut3.Cine,ACES AP0,ACES AP1||
+param:gamma|OfxParamTypeChoice|Gamma|0||||||||||0|Curva in uscita. Timeline non converte|Timeline,DaVinci Intermediate,Linear,Gamma 2.2,Gamma 2.4,Gamma 2.6,Rec.709,sRGB,SLog,SLog2,SLog3,ACEScct||
+param:tonesGroup|OfxParamTypeGroup|Toni|||||||||||||||1
+param:zonesGroup|OfxParamTypeGroup|Zone|||||||||||||||0
+param:toneContrast|OfxParamTypeDouble|Contrast|0|tonesGroup|||-100|100|-100|100|0.1|2||Contrasto attorno al grigio 18% (Pivot in Zone): pendenza x2 a +100, x1/2 a -100. I bordi delle zone restano in stop di scena|||
+param:toneHighlights|OfxParamTypeDouble|Highlights|0|tonesGroup|||-100|100|-100|100|0.1|2||Negativo: spalla filmica, comprime le alte luci fino a portare il massimo registrato sul Bianco a -100 (almeno 1,5 stop piu giu); le luci piu compresse vanno verso il bianco senza cambiare tinta. Positivo: piu stacco nelle alte luci. Grigio e toni sotto restano fermi|||
+param:toneShadows|OfxParamTypeDouble|Shadows|0|tonesGroup|||-100|100|-100|100|0.1|2||Esposizione dei toni sotto -1 stop, 100 = 2 stop. Alza anche il nero: per tenerlo giu usa Blacks|||
+param:toneWhites|OfxParamTypeDouble|Whites|0|tonesGroup|||-100|100|-100|100|0.1|2||Esposizione dei toni da +3,5 stop al clip, 100 = 1 stop|||
+param:softClipLevel|OfxParamTypeDouble|Bianco (stop)|2.5|tonesGroup|||1|10|1|8|0.05|2||Dove arriva il massimo registrato con Highlights -100 e dove Soft Clip mette il tetto, in stop sopra il grigio 18%. 2,5 = bianco Rec.709 con un CST senza tone mapping; con un DRT (ACES, AgX, DaVinci) alza a 4-5|||
+param:toneBlacks|OfxParamTypeDouble|Blacks|0|tonesGroup|||-100|100|-100|100|0.1|2||Velo in luce lineare 5 stop sotto il grigio: -100 = nero giu di 3 stop, +100 = su di 1. Grigio fermo|||
+param:toneVibrance|OfxParamTypeDouble|Vibrance|0|tonesGroup|||-100|100|-100|100|0.1|2||Saturazione pesata sui colori meno saturi, con gli incarnati protetti|||
+param:toneSaturation|OfxParamTypeDouble|Saturation|0|tonesGroup|||-100|100|-100|100|0.1|2||Saturazione a luminanza invariata, uguale in ogni spazio colore del nodo|||
+param:toneReset|OfxParamTypePushButton|Azzera toni||tonesGroup||||||||||Riporta a zero Contrast, Highlights, Shadows, Whites, Blacks, Vibrance e Saturation. Esposizione, bilanciamento e Bianco non cambiano|||
+param:fcZones|OfxParamTypeBoolean|False color: zone|0|zonesGroup|||||||||0|Colora ogni pixel con la zona che lo muove, misurata sulla stessa grandezza delle zone. Dove due zone si sovrappongono le tinte si mescolano||fc_zones.png|
+param:zonePivot|OfxParamTypeDouble|Contrast Pivot|0|zonesGroup|||-4|4|-3|3|0.05|2||Stop dal grigio 18% attorno a cui ruota Contrast|||
+param:zoneBlackExp|OfxParamTypeDouble|Black Exp|0|zonesGroup|||-6|6|-3|3|0.05|2||Esposizione in stop dei toni sotto di Range: dentro la zona e un guadagno puro, la texture resta intatta|||
+param:zoneBlackSat|OfxParamTypeDouble|Black Sat|0|zonesGroup|||-100|100|-100|100|0.1|2||Saturazione della zona, a luminanza invariata|||
+param:zoneBlackRange|OfxParamTypeDouble|Black Range|-4|zonesGroup|||-10|10|-8|8|0.1|2||Bordo della zona, in stop dal grigio 18%|||
+param:zoneBlackFalloff|OfxParamTypeDouble|Black Falloff|1|zonesGroup|||0.5|6|0.5|4|0.05|2||Larghezza della transizione in stop: oltre meta corsa si allarga da sola|||
+param:zoneShadowExp|OfxParamTypeDouble|Shadow Exp|0|zonesGroup|||-6|6|-3|3|0.05|2||Esposizione in stop dei toni sotto di Range: dentro la zona e un guadagno puro, la texture resta intatta|||
+param:zoneShadowSat|OfxParamTypeDouble|Shadow Sat|0|zonesGroup|||-100|100|-100|100|0.1|2||Saturazione della zona, a luminanza invariata|||
+param:zoneShadowRange|OfxParamTypeDouble|Shadow Range|1|zonesGroup|||-10|10|-8|8|0.1|2||Bordo della zona, in stop dal grigio 18%|||
+param:zoneShadowFalloff|OfxParamTypeDouble|Shadow Falloff|2|zonesGroup|||0.5|6|0.5|4|0.05|2||Larghezza della transizione in stop: oltre meta corsa si allarga da sola|||
+param:zoneLightExp|OfxParamTypeDouble|Light Exp|0|zonesGroup|||-6|6|-3|3|0.05|2||Esposizione in stop dei toni sopra di Range: dentro la zona e un guadagno puro, la texture resta intatta|||
+param:zoneLightSat|OfxParamTypeDouble|Light Sat|0|zonesGroup|||-100|100|-100|100|0.1|2||Saturazione della zona, a luminanza invariata|||
+param:zoneLightRange|OfxParamTypeDouble|Light Range|-1|zonesGroup|||-10|10|-8|8|0.1|2||Bordo della zona, in stop dal grigio 18%|||
+param:zoneLightFalloff|OfxParamTypeDouble|Light Falloff|2|zonesGroup|||0.5|6|0.5|4|0.05|2||Larghezza della transizione in stop: oltre meta corsa si allarga da sola|||
+param:zoneSpecularExp|OfxParamTypeDouble|Specular Exp|0|zonesGroup|||-6|6|-3|3|0.05|2||Esposizione in stop dei toni sopra di Range: dentro la zona e un guadagno puro, la texture resta intatta|||
+param:zoneSpecularSat|OfxParamTypeDouble|Specular Sat|0|zonesGroup|||-100|100|-100|100|0.1|2||Saturazione della zona, a luminanza invariata|||
+param:zoneSpecularRange|OfxParamTypeDouble|Specular Range|4|zonesGroup|||-10|10|-8|8|0.1|2||Bordo della zona, in stop dal grigio 18%|||
+param:zoneSpecularFalloff|OfxParamTypeDouble|Specular Falloff|1|zonesGroup|||0.5|6|0.5|4|0.05|2||Larghezza della transizione in stop: oltre meta corsa si allarga da sola|||
+param:softClip|OfxParamTypeBoolean|Soft Clip|0|zonesGroup|||||||||0|Ripiega le alte luci verso il Bianco (in Toni), un tetto che non raggiungono mai: contenimento, non recupero|||
+param:softClipColor|OfxParamTypeDouble|Soft Clip Color|0|zonesGroup|||-100|100|-100|100|0.1|2||Colore delle luci ripiegate sotto il Bianco: verso destra lo tiene, verso sinistra va verso la pellicola, che schiarendo desatura|||
+param:zoneReset|OfxParamTypePushButton|Azzera zone||zonesGroup||||||||||Riporta le zone e il Soft Clip ai valori iniziali|||
+param:advancedGroup|OfxParamTypeGroup|Avanzate|||||||||||||||0
+param:nodeInput|OfxParamTypeChoice|Ingresso nodo|0|advancedGroup|||||||||0|Spazio colore che entra nel nodo. Automatico lo chiede a Resolve: cambialo solo se sbagliato|Automatico,DaVinci WG/Intermediate,S-Gamut3.Cine/S-Log3,S-Gamut3/S-Log3,S-Gamut/S-Log2,ACES AP1/ACEScct||
+param:nodeInfo|OfxParamTypeString|Rilevato|—|advancedGroup||0|||||||0||||
+param:dataLevel|OfxParamTypeChoice|Data level in ingresso|0|advancedGroup|||||||||0|Scala di code value su cui Resolve ha decodificato la clip. Automatico usa l'attributo Data Level della clip: se e su Auto non correggo niente. Full o Video lo dichiari tu, utile su un ProRes esterno che nessun NLE segnala|Automatico,Full (0-1023),Video (64-940),Nessuna correzione||
+param:levelInfo|OfxParamTypeString|Data level|—|advancedGroup||0|||||||0||||
+param:unlockNoMeta|OfxParamTypeBoolean|Sblocca controlli senza metadata|0|advancedGroup|||||||||0|Quando i metadata della clip mancano o non si leggono (registratori esterni, ProRes, clip lunghe): attiva i controlli sui riferimenti di ripresa qui sotto|||
+param:shotEI|OfxParamTypeDouble|EI di ripresa|800|advancedGroup|1||25|409600|100|25600|1||0|Riferimento di ripresa: cambia lo zero di Exposure e Color Temp, non l'immagine. Con White Balance su Custom i valori restano|||
+param:shotTemp|OfxParamTypeDouble|Kelvin di ripresa|5600|advancedGroup|1||2000|15000|2000|15000|10||0|Riferimento di ripresa: cambia lo zero di Exposure e Color Temp, non l'immagine. Con White Balance su Custom i valori restano|||
+param:shotTint|OfxParamTypeDouble|Tint di ripresa|0|advancedGroup|1||-100|100|-100|100|0.1||0|Riferimento di ripresa: cambia lo zero di Exposure e Color Temp, non l'immagine. Con White Balance su Custom i valori restano|||
+param:status|OfxParamTypeString|Stato|—|advancedGroup||0|||||||0||||
+param:detailsGroup|OfxParamTypeGroup|Dati di ripresa||||||||||||Valori letti dalla clip, in sola lettura|||0
+param:infoLens|OfxParamTypeString|Obiettivo|—|detailsGroup||0|||||||0||||
+param:infoFocal|OfxParamTypeString|Focale|—|detailsGroup||0|||||||0||||
+param:infoIris|OfxParamTypeString|Diaframma|—|detailsGroup||0|||||||0||||
+param:infoFocus|OfxParamTypeString|Fuoco|—|detailsGroup||0|||||||0||||
+param:infoShutter|OfxParamTypeString|Shutter|—|detailsGroup||0|||||||0||||
+param:infoExposure|OfxParamTypeString|ISO / EI|—|detailsGroup||0|||||||0||||
+param:infoWhiteBalance|OfxParamTypeString|Bilanciamento|—|detailsGroup||0|||||||0||||
+param:infoColor|OfxParamTypeString|Colore|—|detailsGroup||0|||||||0||||
+param:infoFps|OfxParamTypeString|Frame rate|—|detailsGroup||0|||||||0||||
+param:infoNdStab|OfxParamTypeString|ND / Stabilizzatore|—|detailsGroup||0|||||||0||||
+param:infoLut|OfxParamTypeString|LUT camera|—|detailsGroup||0|||||||0||||
+param:infoFile|OfxParamTypeString|File|—|detailsGroup||0|||||||0||||
+param:boundPath|OfxParamTypeString||||1||||||||0||||
+param:camSpace|OfxParamTypeInteger||-1||1||||||||0||||
+param:camGamma|OfxParamTypeInteger||-1||1||||||||0||||
+param:levelRequired|OfxParamTypeInteger||-1||1||||||||0||||
+param:levelHost|OfxParamTypeInteger||-1||1||||||||0||||
+param:metaValid|OfxParamTypeBoolean||0||1||||||||0||||
+param:refSource|OfxParamTypeInteger||0||1||||||||0||||
+param:highlights|OfxParamTypeDouble||0||1||-100|100|||||||||
+param:shadows|OfxParamTypeDouble||0||1||-100|100|||||||||
+param:contrast|OfxParamTypeDouble||0||1||-100|100|||||||||
+param:saturation|OfxParamTypeDouble||0||1||-100|100|||||||||
+param:colorBoost|OfxParamTypeDouble||0||1||-100|100|||||||||
+param:colorRecovery|OfxParamTypeDouble||0||1||-100|100|||||||||
+param:settingsVersion|OfxParamTypeInteger||0||1||||||||0||||

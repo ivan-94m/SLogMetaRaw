@@ -209,17 +209,19 @@ class UIRegression(unittest.TestCase):
         process.wait.assert_called_once()
         self.manager.timer.Stop.assert_called()
 
-    def test_update_check_reserves_timer_until_complete(self):
+    def test_update_check_runs_on_its_own_timer(self):
+        """A slow GitHub must not lock the window: reading and writing stay available while the
+        check runs, and its answer arrives on the update timer."""
         def interact():
             self.dispatcher.window.On.Version.Clicked(None)
             items = self.dispatcher.window.GetItems()
-            self.assertFalse(items['Read'].Enabled)
-            deadline = time.monotonic() + 2
-            while not items['Read'].Enabled and time.monotonic() < deadline:
-                self.dispatcher.On.Timeout({'who': 'ProgressTimer'})
-                time.sleep(0.001)
             self.assertTrue(items['Read'].Enabled)
+            deadline = time.monotonic() + 2
+            while 'Nessuna versione' not in items['Status'].Text and time.monotonic() < deadline:
+                self.dispatcher.On.Timeout({'who': 'UpdateTimer'})
+                time.sleep(0.001)
             self.assertIn('Nessuna versione', items['Status'].Text)
+            self.assertTrue(items['Read'].Enabled)
 
         self.dispatcher.run = interact
         with mock.patch.object(ui.upd, 'check', return_value={'newer': False, 'current': '1.1.0'}):
@@ -330,16 +332,16 @@ class UIRegression(unittest.TestCase):
 
         self.assertFalse(self.dispatcher.exit_called)
 
-    def test_update_failure_restores_controls(self):
+    def test_update_failure_is_reported_and_leaves_the_window_usable(self):
         def interact():
             self.dispatcher.window.On.Version.Clicked(None)
             items = self.dispatcher.window.GetItems()
             deadline = time.monotonic() + 2
-            while not items['Read'].Enabled and time.monotonic() < deadline:
-                self.dispatcher.On.Timeout({'who': 'ProgressTimer'})
+            while 'broken cache' not in items['Status'].Text and time.monotonic() < deadline:
+                self.dispatcher.On.Timeout({'who': 'UpdateTimer'})
                 time.sleep(0.001)
-            self.assertTrue(items['Read'].Enabled)
             self.assertIn('broken cache', items['Status'].Text)
+            self.assertTrue(items['Read'].Enabled)
 
         self.dispatcher.run = interact
         with mock.patch.object(ui.upd, 'check', side_effect=ValueError('broken cache')):

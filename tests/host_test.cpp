@@ -10,6 +10,7 @@
 #include <pthread.h>
 
 #include <cstdarg>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -19,6 +20,7 @@
 
 #include "ofxCore.h"
 #include "ofxImageEffect.h"
+#include "ofxImageEffectExt.h"
 #include "ofxMemory.h"
 #include "ofxMessage.h"
 #include "ofxMultiThread.h"
@@ -292,7 +294,20 @@ static OfxStatus paramGetPropertySet(OfxParamHandle param, OfxPropertySetHandle*
     return kOfxStatOK;
 }
 
-static OfxParameterSuiteV1 g_paramSuite = {};   // the rest stays null: describe never calls it
+static OfxStatus paramGetNumKeys(OfxParamHandle, unsigned int* n) { *n = 0; return kOfxStatOK; }
+
+static OfxStatus paramSetValueAtTime(OfxParamHandle handle, OfxTime, ...)
+{
+    Param* p = reinterpret_cast<Param*>(handle);
+    va_list ap;
+    va_start(ap, handle);   // no animation: a keyed set is a plain set
+    if (p->type == kOfxParamTypeDouble) p->doubleValue = va_arg(ap, double);
+    else if (isIntLike(p->type)) p->intValue = va_arg(ap, int);
+    va_end(ap);
+    return kOfxStatOK;
+}
+
+static OfxParameterSuiteV1 g_paramSuite = {};   // the rest stays null
 
 // ---------------------------------------------------------------- image effect
 
@@ -456,6 +471,8 @@ static void buildHost()
     g_paramSuite.paramGetValue = paramGetValue;
     g_paramSuite.paramGetValueAtTime = paramGetValueAtTime;
     g_paramSuite.paramSetValue = paramSetValue;
+    g_paramSuite.paramGetNumKeys = paramGetNumKeys;
+    g_paramSuite.paramSetValueAtTime = paramSetValueAtTime;
     g_effectSuite.getPropertySet = effectGetPropertySet;
     g_effectSuite.getParamSet = effectGetParamSet;
     g_effectSuite.clipDefine = clipDefine;
@@ -465,7 +482,41 @@ static void buildHost()
     g_host.fetchSuite = fetchSuite;
 }
 
+// ---------------------------------------------------------------- parameter dump
+
+static std::string joinValues(PropSet* p, const char* prop)
+{
+    std::string out;
+    char buf[64];
+    for (const std::string& v : p->strings[prop]) out += (out.empty() ? "" : ",") + v;
+    for (int v : p->ints[prop]) { snprintf(buf, sizeof(buf), "%d", v); out += (out.empty() ? "" : ",") + std::string(buf); }
+    for (double v : p->doubles[prop]) { snprintf(buf, sizeof(buf), "%g", v); out += (out.empty() ? "" : ",") + std::string(buf); }
+    return out;
+}
+
+// One line per parameter, in definition order: the golden file of the panel (tests/golden).
+static void dumpParams(ParamSet* s)
+{
+    static const char* const props[] = { kOfxPropLabel, kOfxParamPropDefault, kOfxParamPropParent,
+                                         kOfxParamPropSecret, kOfxParamPropEnabled, kOfxParamPropMin, kOfxParamPropMax,
+                                         kOfxParamPropDisplayMin, kOfxParamPropDisplayMax, kOfxParamPropIncrement,
+                                         kOfxParamPropDigits, kOfxParamPropAnimates, kOfxParamPropHint,
+                                         kOfxParamPropChoiceOption, kOfxPropIcon, kOfxParamPropGroupOpen };
+    for (size_t i = 0; i < s->params.size(); ++i) {
+        Param* p = s->params[i];
+        printf("param:%s|%s", p->name.c_str(), p->type.c_str());
+        for (const char* prop : props) printf("|%s", joinValues(p->props, prop).c_str());
+        printf("\n");
+    }
+}
+
 // ---------------------------------------------------------------- the run
+
+static bool g_dumpParams = false;
+static bool g_noReload = false, g_beginEdit = false;
+static std::vector<std::pair<std::string, std::string> > g_sets;   // --set name=value
+static std::vector<std::string> g_changes;                            // --change name (user edit)
+static int g_pluginIndex = 0;
 
 static int describeContext(OfxPlugin* plugin, const char* context, size_t* paramCount)
 {
@@ -480,6 +531,7 @@ static int describeContext(OfxPlugin* plugin, const char* context, size_t* param
                                      reinterpret_cast<OfxImageEffectHandle>(&effect),
                                      handleOf(effect.props), NULL);
     *paramCount = effect.params->params.size();
+    if (g_dumpParams && !strcmp(context, kOfxImageEffectContextFilter)) dumpParams(effect.params);
     if (st != kOfxStatOK) {
         fprintf(stderr, "describeInContext(%s) ha restituito %d\n", context, st);
         return 0;
@@ -507,6 +559,14 @@ static int createInstance(OfxPlugin* plugin, const char* clipPath, int* failed)
         return 0;
     }
     applyDefaults(effect.params);
+    for (size_t i = 0; i < g_sets.size(); ++i) {
+        std::map<std::string, Param*>::iterator it = effect.params->byName.find(g_sets[i].first);
+        if (it == effect.params->byName.end()) { fprintf(stderr, "--set: parametro %s inesistente\n", g_sets[i].first.c_str()); *failed = 1; return 0; }
+        Param* p = it->second;
+        if (p->type == kOfxParamTypeString) p->stringValue = g_sets[i].second;
+        else if (p->type == kOfxParamTypeDouble) p->doubleValue = atof(g_sets[i].second.c_str());
+        else p->intValue = atoi(g_sets[i].second.c_str());
+    }
 
     OfxStatus st = plugin->mainEntry(kOfxActionCreateInstance, handle, NULL, NULL);
     if (st != kOfxStatOK) {
@@ -515,28 +575,69 @@ static int createInstance(OfxPlugin* plugin, const char* clipPath, int* failed)
         return 0;
     }
 
-    // "Rileggi metadata": the action Resolve sends when the button is pressed
-    PropSet* changed = newProps();
-    propSetString(handleOf(changed), kOfxPropChangeReason, 0, kOfxChangeUserEdited);
-    propSetString(handleOf(changed), kOfxPropName, 0, "reload");
-    propSetString(handleOf(changed), kOfxPropType, 0, kOfxTypeParameter);
-    propSetDouble(handleOf(changed), kOfxPropTime, 0, 0.0);
-    st = plugin->mainEntry(kOfxActionInstanceChanged, handle, handleOf(changed), NULL);
-    if (st != kOfxStatOK && st != kOfxStatReplyDefault) {
-        fprintf(stderr, "FALLITO: instanceChanged(reload) ha restituito %d\n", st);
-        *failed = 1;
+    if (g_beginEdit) plugin->mainEntry(kOfxActionBeginInstanceEdit, handle, NULL, NULL);
+    std::vector<std::string> changes = g_changes;
+    if (!g_noReload) changes.insert(changes.begin(), "reload");   // "Rileggi metadata"
+    for (size_t i = 0; i < changes.size(); ++i) {
+        // "--change name=value": the user types a value, then the host reports the edit
+        size_t eq = changes[i].find('=');
+        if (eq != std::string::npos) {
+            const std::string name = changes[i].substr(0, eq), value = changes[i].substr(eq + 1);
+            changes[i] = name;
+            std::map<std::string, Param*>::iterator it = effect.params->byName.find(name);
+            if (it != effect.params->byName.end()) {
+                Param* p = it->second;
+                if (p->type == kOfxParamTypeString) p->stringValue = value;
+                else if (p->type == kOfxParamTypeDouble) p->doubleValue = atof(value.c_str());
+                else p->intValue = atoi(value.c_str());
+            }
+        }
+        PropSet* changed = newProps();
+        propSetString(handleOf(changed), kOfxPropChangeReason, 0, kOfxChangeUserEdited);
+        propSetString(handleOf(changed), kOfxPropName, 0, changes[i].c_str());
+        propSetString(handleOf(changed), kOfxPropType, 0, kOfxTypeParameter);
+        propSetDouble(handleOf(changed), kOfxPropTime, 0, 0.0);
+        st = plugin->mainEntry(kOfxActionInstanceChanged, handle, handleOf(changed), NULL);
+        if (st != kOfxStatOK && st != kOfxStatReplyDefault) {
+            fprintf(stderr, "FALLITO: instanceChanged(%s) ha restituito %d\n", changes[i].c_str(), st);
+            *failed = 1;
+        }
+    }
+
+    PropSet* idIn = newProps();
+    PropSet* idOut = newProps();
+    propSetDouble(handleOf(idIn), kOfxPropTime, 0, 0.0);
+    propSetString(handleOf(idIn), kOfxImageEffectPropFieldToRender, 0, kOfxImageFieldNone);
+    int window[4] = { 0, 0, 64, 32 };
+    propSetIntN(handleOf(idIn), kOfxImageEffectPropRenderWindow, 4, window);
+    double scale[2] = { 1.0, 1.0 };
+    propSetDoubleN(handleOf(idIn), kOfxImageEffectPropRenderScale, 2, scale);
+    st = plugin->mainEntry(kOfxImageEffectActionIsIdentity, handle, handleOf(idIn), handleOf(idOut));
+    printf("identity=%d\n", st == kOfxStatOK ? 1 : 0);
+
+    for (size_t i = 0; i < effect.params->params.size(); ++i) {
+        Param* pa = effect.params->params[i];
+        int enabled = 1, secret = 0;
+        std::vector<int>& en = pa->props->ints[kOfxParamPropEnabled];
+        std::vector<int>& se = pa->props->ints[kOfxParamPropSecret];
+        if (!en.empty()) enabled = en[0];
+        if (!se.empty()) secret = se[0];
+        printf("enabled:%s=%d\nsecret:%s=%d\n", pa->name.c_str(), enabled, pa->name.c_str(), secret);
+        std::vector<std::string>& label = pa->props->strings[kOfxPropLabel];
+        if (!label.empty()) printf("label:%s=%s\n", pa->name.c_str(), label[0].c_str());
+        std::vector<std::string>& hint = pa->props->strings[kOfxParamPropHint];
+        if (!hint.empty()) printf("hint:%s=%s\n", pa->name.c_str(), hint[0].c_str());
     }
 
     for (size_t i = 0; i < effect.params->params.size(); ++i) {
         Param* pa = effect.params->params[i];
         if (pa->name == "camera" || pa->name == "status")
             printf("%s=%s\n", pa->name.c_str(), pa->stringValue.c_str());
-        else if (pa->name == "colorTemp" || pa->name == "exposure" || pa->name == "tint")
+        else if (pa->type == kOfxParamTypeDouble)
             printf("%s=%g\n", pa->name.c_str(), pa->doubleValue);
-        else if (pa->name == "metaValid" || pa->name == "settingsVersion"
-                 || pa->name == "dataLevel" || pa->name == "levelRequired" || pa->name == "levelHost")
+        else if (isIntLike(pa->type))
             printf("%s=%d\n", pa->name.c_str(), pa->intValue);
-        else if (pa->name == "levelInfo")
+        else if (pa->type == kOfxParamTypeString)
             printf("%s=%s\n", pa->name.c_str(), pa->stringValue.c_str());
     }
 
@@ -548,8 +649,21 @@ int main(int argc, char** argv)
 {
     setvbuf(stdout, NULL, _IONBF, 0);   // keep the trace when the run ends badly
     if (argc < 2) {
-        fprintf(stderr, "uso: host_test <SLogMetaRaw.ofx>\n");
+        fprintf(stderr, "uso: host_test <SLogMetaRaw.ofx> [clip] [--dump-params]\n");
         return 2;
+    }
+    const char* clipArg = NULL;
+    for (int i = 2; i < argc; ++i) {
+        if (!strcmp(argv[i], "--dump-params")) g_dumpParams = true;
+        else if (!strcmp(argv[i], "--no-reload")) g_noReload = true;
+        else if (!strcmp(argv[i], "--begin-edit")) g_beginEdit = true;
+        else if (!strcmp(argv[i], "--plugin") && i + 1 < argc) g_pluginIndex = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--change") && i + 1 < argc) g_changes.push_back(argv[++i]);
+        else if (!strcmp(argv[i], "--set") && i + 1 < argc) {
+            std::string kv = argv[++i];
+            size_t eq = kv.find('=');
+            g_sets.push_back(std::make_pair(kv.substr(0, eq), eq == std::string::npos ? "" : kv.substr(eq + 1)));
+        } else clipArg = argv[i];
     }
     void* lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!lib) {
@@ -568,7 +682,12 @@ int main(int argc, char** argv)
         fprintf(stderr, "nessun plugin nel bundle\n");
         return 1;
     }
-    OfxPlugin* plugin = getPlugin(0);
+    printf("plugins=%d\n", getNumber());
+    if (g_pluginIndex < 0 || g_pluginIndex >= getNumber()) {
+        fprintf(stderr, "--plugin %d fuori intervallo\n", g_pluginIndex);
+        return 1;
+    }
+    OfxPlugin* plugin = getPlugin(g_pluginIndex);
     printf("plugin: %s v%d.%d\n", plugin->pluginIdentifier, plugin->pluginVersionMajor, plugin->pluginVersionMinor);
 
     fprintf(stderr, "[host] buildHost\n");
@@ -592,6 +711,10 @@ int main(int argc, char** argv)
         fprintf(stderr, "azione describe fallita\n");
         return 1;
     }
+    {
+        std::vector<std::string>& nsa = described.props->strings[kOfxImageEffectPropNoSpatialAwareness];
+        printf("noSpatialAwareness=%s\n", nsa.empty() ? "" : nsa[0].c_str());
+    }
 
     // Resolve describes the plugin once per context it supports.
     size_t filterParams = 0, generalParams = 0;
@@ -603,7 +726,7 @@ int main(int argc, char** argv)
     // a live node, with the clip given on the command line when there is one
     int failed = 0;
     fprintf(stderr, "[host] createInstance\n");
-    createInstance(plugin, argc > 2 ? argv[2] : NULL, &failed);
+    createInstance(plugin, clipArg, &failed);
 
     plugin->mainEntry(kOfxActionUnload, NULL, NULL, NULL);
     if (failed) return 1;

@@ -8,37 +8,25 @@ describeInContext calls (which left the second context with no parameters).
 import os
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OFX = os.path.join(ROOT, 'ofx', 'SLogMetaRaw')
-SDK = os.path.join(OFX, '.ofxsdk')
-BINARY = os.path.join(OFX, 'SLogMetaRaw.ofx.bundle', 'Contents', 'MacOS', 'SLogMetaRaw.ofx')
+sys.path.insert(0, os.path.join(ROOT, 'tests'))
+from plugin_build import BUNDLE_BINARY as BINARY, test_bin  # noqa: E402
+
+GOLDEN = {0: os.path.join(ROOT, 'tests', 'golden', 'params_develop.txt'),
+          1: os.path.join(ROOT, 'tests', 'golden', 'params_detail.txt')}
 
 
 class OfxHost(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        if not shutil.which('clang++'):
-            raise unittest.SkipTest('clang++ non disponibile')
-        if not os.path.exists(BINARY):
-            raise unittest.SkipTest('plugin non compilato (make in ofx/SLogMetaRaw)')
-        if not os.path.isdir(SDK):
-            raise unittest.SkipTest('SDK OpenFX non trovato')
-        cls.tmp = tempfile.mkdtemp()
-        cls.exe = os.path.join(cls.tmp, 'host_test')
-        subprocess.run(['clang++', '-std=c++17', '-O1', '-o', cls.exe,
-                        os.path.join(ROOT, 'tests', 'host_test.cpp'),
-                        '-I', os.path.join(SDK, 'OpenFX-1.4', 'include'),
-                        '-I', os.path.join(SDK, 'Support', 'include')], check=True)
-
-    @classmethod
-    def tearDownClass(cls):
-        shutil.rmtree(getattr(cls, 'tmp', ''), ignore_errors=True)
+        cls.exe = test_bin('host_test')
+        if not cls.exe or not os.path.exists(BINARY):
+            raise unittest.SkipTest('plugin o host di test non compilabili qui')
 
     def run_host(self, clip=None, env=None):
         child_env = dict(env if env is not None else os.environ)
@@ -55,6 +43,35 @@ class OfxHost(unittest.TestCase):
 
     def test_load_describe_and_both_contexts(self):
         self.run_host()
+
+    def host(self, *args):
+        run = subprocess.run([self.exe, BINARY] + list(args), capture_output=True, text=True, timeout=20,
+                             env=dict(os.environ, SLOGMETARAW_TEST_NO_RESOLVE='1', SLOGMETARAW_NO_UPDATE_CHECK='1'))
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        return run.stdout
+
+    def test_the_panels_match_the_golden_files(self):
+        """Every parameter's name, type, label, default, parent and range, in order. A change here
+        is a change of what Resolve saves with every grade: update the golden file on purpose."""
+        for index, golden in GOLDEN.items():
+            out = self.host('--plugin', str(index), '--dump-params', '--no-reload')
+            release = open(os.path.join(ROOT, 'slogmetaraw', '__init__.py'), encoding='utf-8').read() \
+                .split("__version__ = '")[1].split("'")[0]
+            got = [l.replace('|v%s|' % release, '|v{release}|') for l in out.splitlines() if l.startswith('param:')]
+            with open(golden, encoding='utf-8') as fh:
+                self.assertEqual(got, fh.read().splitlines(), golden)
+
+    def test_the_lut_safe_node_comes_first_and_the_spatial_one_second(self):
+        """Resolve identifies a plugin by bundle index too, and only a pointwise node may be baked into
+        a LUT: a spatial one declaring otherwise would corrupt Generate LUT without a warning."""
+        first = self.host('--plugin', '0', '--no-reload')
+        second = self.host('--plugin', '1', '--no-reload')
+        self.assertIn('plugins=2', first)
+        self.assertIn('plugin: com.slogmetaraw.SLogMetaRaw v', first)
+        self.assertIn('noSpatialAwareness=true', first)
+        self.assertIn('plugin: com.slogmetaraw.SLogMetaRawDetail v1.0', second)
+        self.assertIn('noSpatialAwareness=false', second)
+        self.assertIn('identity=1', second)
 
     def test_instance_without_a_clip_stays_neutral(self):
         """No source path (a compound clip, for instance): the node must still build."""
@@ -102,7 +119,7 @@ class OfxHost(unittest.TestCase):
             # The fake reader isolates process launching from Sony parsing. It must
             # receive the exact clip path and create the record the real plugin reads;
             # in --to-resolve mode (the reload button) it also prints the JSON result.
-            record = {'supported': 1, 'camera_name': 'Bootstrap test camera',
+            record = {'version': 6, 'supported': 1, 'camera_name': 'Bootstrap test camera',
                       'shot_temp': 4300, 'shot_tint': 0, 'shot_ei': 1250}
             reader = (
                 'import json, os, sys, unicodedata\n'
@@ -110,7 +127,7 @@ class OfxHost(unittest.TestCase):
                 'assert sys.argv[1] in ("--cache", "--to-resolve"), sys.argv\n'
                 'assert sys.argv[2] == ' + repr(str(clip)) + '\n'
                 'value = 0xcbf29ce484222325\n'
-                'for byte in unicodedata.normalize("NFC", sys.argv[2]).encode("utf-8"):\n'
+                'for byte in unicodedata.normalize("NFC", os.path.realpath(sys.argv[2])).encode("utf-8"):\n'
                 '    value = ((value ^ byte) * 0x100000001b3) & 0xffffffffffffffff\n'
                 'cache = Path(os.environ["HOME"]) / "Library/Application Support/SLogMetaRaw/cache"\n'
                 'cache.mkdir(parents=True, exist_ok=True)\n'
