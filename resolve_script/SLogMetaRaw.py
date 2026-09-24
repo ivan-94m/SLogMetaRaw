@@ -14,6 +14,7 @@ import traceback
 
 LIB_DIR = '__LIB_DIR__'
 LOG_PATH = os.path.expanduser('~/Library/Logs/SLogMetaRaw/launcher.log')
+PROJECT_WAIT = 3.0   # seconds for Fusion and the open project once Resolve answers
 
 
 def _log(message):
@@ -162,15 +163,22 @@ def main(namespace=None):
         bmd = namespace.get('bmd')
         if bmd is None:
             import DaVinciResolveScript as bmd
-        resolve = _retry(lambda: _connect(namespace, bmd),
-                         'S-Log MetaRaw non riesce a collegarsi a DaVinci Resolve.\n'
-                         'Apri un progetto e rilancia da Workspace > Scripts. '
-                         'Se il problema persiste, chiudi e riapri Resolve.')
+        resolve = namespace.get('resolve')
+        if resolve is not None:
+            _log('Connessione: resolve globale')
+        else:
+            # started outside the menu: Resolve may still be finishing its launch
+            resolve = _retry(lambda: _connect(namespace, bmd),
+                             'S-Log MetaRaw non riesce a collegarsi a DaVinci Resolve.\n'
+                             'Apri un progetto e rilancia da Workspace > Scripts. '
+                             'Se il problema persiste, chiudi e riapri Resolve.')
         fusion = _retry(lambda: _fusion(namespace, resolve),
-                        'L\'interfaccia Fusion di DaVinci Resolve non è disponibile.')
+                        'L\'interfaccia Fusion di DaVinci Resolve non è disponibile.',
+                        attempts=int(PROJECT_WAIT / 0.25))
         _retry(lambda: resolve.GetProjectManager().GetCurrentProject(),
                'Non c\'è un progetto aperto. Apri un progetto in DaVinci Resolve '
-               'e rilancia S-Log MetaRaw da Workspace > Scripts.')
+               'e rilancia S-Log MetaRaw da Workspace > Scripts.',
+               attempts=int(PROJECT_WAIT / 0.25))
         if getattr(fusion, 'UIManager', None) is None:
             raise RuntimeError('UIManager non è disponibile. La finestra S-Log MetaRaw '
                                'richiede DaVinci Resolve Studio.')
