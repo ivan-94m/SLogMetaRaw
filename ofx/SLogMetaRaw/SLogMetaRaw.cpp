@@ -869,12 +869,10 @@ bool SLogMetaRaw::buildParams(double p_Time, DevelopParams& p, std::string* p_No
     p.nodeSpace = nodeSpace;
     p.nodeGamma = nodeGamma;
 
-    // ---- data level (the maths and the why are in sm_fix_levels, DevelopMath.h)
-    // This runs before the bypass check on purpose: a wrong data level is a decode
-    // error of the file, not a look, so it is still worth fixing on a clip whose
-    // develop is switched off - and on a clip with no Sony metadata at all, where
-    // the colourist declares the encoding in "Ingresso nodo" (an Atomos ProRes of
-    // the same S-Log, for instance, which no NLE flags correctly).
+    // ---- data level (maths/why in sm_fix_levels, DevelopMath.h). Runs before the
+    // bypass check: a wrong data level is a file decode error, not a look, so it's
+    // worth fixing even with develop off, or with no Sony metadata at all (e.g. an
+    // Atomos ProRes of the same S-Log, declared via "Ingresso nodo").
     int levelChoice = 0;
     m_DataLevel->getValue(levelChoice);
     const int camSpaceCode = m_CamSpace->getValue(), camGammaCode = m_CamGamma->getValue();
