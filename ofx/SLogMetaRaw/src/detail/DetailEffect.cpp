@@ -80,7 +80,7 @@ InputOrigin DetailEffect::resolveInput(int& space, int& gamma) const
 {
     int input = 0;
     m_NodeInput->getValue(input);
-    if (input > 0) {
+    if (input > 0 && input < kNodeInputCount) {
         space = kNodeInputPairs[input][0];
         gamma = kNodeInputPairs[input][1];
         return InputOrigin::Declared;
@@ -90,9 +90,10 @@ InputOrigin DetailEffect::resolveInput(int& space, int& gamma) const
     if (!cs.empty()) return InputOrigin::Unknown;
     std::string bound;
     m_BoundPath->getValue(bound);
-    if (bound == sourcePath() && m_CamSpace->getValue() >= 0 && m_CamGamma->getValue() >= 0) {
-        space = m_CamSpace->getValue();
-        gamma = m_CamGamma->getValue();
+    const int camS = validCode(m_CamSpace->getValue(), kSpaceCount), camG = validCode(m_CamGamma->getValue(), kGammaCount);
+    if (bound == sourcePath() && camS >= 0 && camG >= 0) {
+        space = camS;
+        gamma = camG;
         return InputOrigin::Camera;
     }
     space = 8;   // S-Gamut3.Cine / S-Log3: what an unmanaged YRGB timeline of Sony footage carries
@@ -198,11 +199,12 @@ private:
 };
 
 // Working planes shared by every Detail node: reused between frames instead of reallocated, and at
-// most kKeep sets stay allocated however many nodes the project has.
+// most kKeep sets stay allocated however many nodes the project has. A set grown for a frame much
+// larger than the current one is freed, so one 8K render does not pin its memory for HD work.
 class ScratchLease
 {
 public:
-    ScratchLease()
+    explicit ScratchLease(size_t pixels) : m_Pixels(pixels)
     {
         std::lock_guard<std::mutex> lock(mutex());
         if (!pool().empty()) {
@@ -215,7 +217,7 @@ public:
     ~ScratchLease()
     {
         std::lock_guard<std::mutex> lock(mutex());
-        if (pool().size() < kKeep) pool().push_back(std::move(m_S));
+        if (pool().size() < kKeep && m_S->L0.capacity() <= 2 * m_Pixels) pool().push_back(std::move(m_S));
     }
     DetailScratch& operator*() { return *m_S; }
 
@@ -223,6 +225,7 @@ private:
     static const size_t kKeep = 2;
     static std::mutex& mutex() { static std::mutex m; return m; }
     static std::vector<std::unique_ptr<DetailScratch>>& pool() { static std::vector<std::unique_ptr<DetailScratch>> p; return p; }
+    size_t m_Pixels;
     std::unique_ptr<DetailScratch> m_S;
 };
 }
@@ -287,7 +290,7 @@ void DetailEffect::render(const OFX::RenderArguments& p_Args)
         HostThreads threads(n, fn);
         threads.multiThread();
     };
-    ScratchLease scratch;
+    ScratchLease scratch((size_t)p.W * p.H);
     detailRenderCPU(p, static_cast<const float*>(src->getPixelData()), (size_t)src->getRowBytes() / 4,
                     static_cast<float*>(dst->getPixelData()), (size_t)dst->getRowBytes() / 4, parallel, *scratch);
 }

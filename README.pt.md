@@ -45,7 +45,7 @@ que existe. Não pode criar o que não existe.
 
 ## Instalação
 
-1. Baixe `SLogMetaRaw-2.0.1.dmg` em **Releases** e abra-o.
+1. Baixe `SLogMetaRaw-2.1.0.dmg` em **Releases** e abra-o.
 2. Dê um duplo clique em **Installa S-Log MetaRaw.pkg**. Não está assinado com um certificado da Apple: na primeira vez,
    clique com o botão direito › **Abrir**. Pede a senha do Mac porque o plugin vai para uma pasta do sistema.
 3. Reinicie o DaVinci Resolve.
@@ -129,7 +129,7 @@ O nó é pontual: cada pixel depende só de si mesmo. Nunca cria halos e o **Gen
 
 | Controle | O que faz |
 |---|---|
-| **Versão** (no topo) | `v2.0.1`. Uma vez por dia pergunta ao GitHub pela última release. Se houver, mostra **🟢 v2.0.1 → 2.x.y** e o clique abre o download do DMG no navegador. Nunca instala nada sozinho |
+| **Versão** (no topo) | `v2.1.0`. Uma vez por dia pergunta ao GitHub pela última release. Se houver, mostra **🟢 v2.1.0 → 2.x.y** e o clique abre o download do DMG no navegador. Nunca instala nada sozinho |
 | **Camera** · **Rileggi metadata** | a câmera lida. *Rileggi* (reler) lê o clipe de novo, devolve cada controle aos valores da câmera e grava os metadados do clipe no Media Pool |
 | **Decode Using** | *Clip* permite mudar os controles; *Camera metadata* trava-os nos valores de gravação |
 | **White Balance** · **Color Temp** · **Tint** | As shot ou presets. Adaptação cromática Bradford em luz linear, a partir do branco que a câmera registrou |
@@ -208,7 +208,7 @@ ruído, mas junto a bordas fortes o grão pode crescer 1,25–1,7 vezes. O Dehaz
 ## Atualizações e privacidade
 
 - Os **nós** perguntam ao GitHub pela última release deste projeto no máximo uma vez por dia, em segundo plano. A
-  requisição leva só a versão do programa (`User-Agent: SLogMetaRaw/2.0.1`). Para desativar, crie o arquivo vazio
+  requisição leva só a versão do programa (`User-Agent: SLogMetaRaw/2.1.0`). Para desativar, crie o arquivo vazio
   `~/Library/Application Support/SLogMetaRaw/no_update_check`.
 - O **script** só consulta quando você clica na sua versão.
 - Um clique apenas abre um link de download das releases do GitHub deste projeto. Nada é instalado sem você.

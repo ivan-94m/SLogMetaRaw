@@ -113,6 +113,7 @@ TABLES = {
             'No MP4/MXF clips found for the chosen source.',
         'Prima premi "Leggi metadata".': 'Press "Read metadata" first.',
         'Nessuna clip letta da scrivere.': 'No clips read to write.',
+        'Il progetto è cambiato: premi di nuovo "Leggi metadata".': 'Project changed: press "Read metadata" again.',
         'Errore: %s  (dettagli nella console di Resolve)': 'Error: %s  (details in the Resolve console)',
         'CSV salvato: %s  →  in Resolve: File › Import › Metadata, con "crea campi custom" attivo.':
             'CSV saved: %s  →  in Resolve: File › Import › Metadata, with "create custom fields" enabled.',
@@ -200,6 +201,7 @@ TABLES = {
             'No se encontraron clips MP4/MXF para el origen elegido.',
         'Prima premi "Leggi metadata".': 'Pulsa primero "Leer metadatos".',
         'Nessuna clip letta da scrivere.': 'No hay clips leídos para escribir.',
+        'Il progetto è cambiato: premi di nuovo "Leggi metadata".': 'El proyecto ha cambiado: pulsa de nuevo "Leer metadatos".',
         'Errore: %s  (dettagli nella console di Resolve)':
             'Error: %s  (detalles en la consola de Resolve)',
         'CSV salvato: %s  →  in Resolve: File › Import › Metadata, con "crea campi custom" attivo.':
@@ -314,6 +316,7 @@ TABLES = {
             'Nenhum clipe MP4/MXF encontrado para a origem escolhida.',
         'Prima premi "Leggi metadata".': 'Pressione primeiro "Ler metadados".',
         'Nessuna clip letta da scrivere.': 'Nenhum clipe lido para gravar.',
+        'Il progetto è cambiato: premi di nuovo "Leggi metadata".': 'O projeto mudou: pressione "Ler metadados" novamente.',
         'Errore: %s  (dettagli nella console di Resolve)':
             'Erro: %s  (detalhes no console do Resolve)',
         'CSV salvato: %s  →  in Resolve: File › Import › Metadata, con "crea campi custom" attivo.':
@@ -430,6 +433,7 @@ TABLES = {
         'Nessuna clip MP4/MXF trovata per l\'origine scelta.': '所选来源中没有找到 MP4/MXF 片段。',
         'Prima premi "Leggi metadata".': '请先点击“读取元数据”。',
         'Nessuna clip letta da scrivere.': '没有可写入的已读片段。',
+        'Il progetto è cambiato: premi di nuovo "Leggi metadata".': '项目已更改：请再次点击“读取元数据”。',
         'Errore: %s  (dettagli nella console di Resolve)': '错误：%s（详情见 Resolve 控制台）',
         'CSV salvato: %s  →  in Resolve: File › Import › Metadata, con "crea campi custom" attivo.':
             'CSV 已保存：%s → 在 Resolve 中：文件 › 导入 › 元数据，启用“创建自定义字段”。',

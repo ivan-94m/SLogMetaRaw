@@ -15,8 +15,8 @@ namespace {
 
 struct DtPass { int inW, inH, outW, outH; int s; float r; int len; int rowPixels; };
 
-// Scratch planes of one frame size. The GPU runs after render() returns, so a set goes back to the
-// pool only in the command buffer's completion handler.
+// Scratch planes of one frame size (planes grow on demand). The GPU runs after render() returns, so a
+// set goes back to the pool only in the command buffer's completion handler.
 struct Scratch
 {
     std::map<std::string, id<MTLBuffer>> planes;
@@ -29,8 +29,13 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
         auto& byKey = m_Free[device];
-        for (auto it = byKey.begin(); it != byKey.end();)   // another frame size: its memory goes
-            it = it->first == key ? std::next(it) : byKey.erase(it);
+        auto& recent = m_Recent[device];   // the last kSizes frame sizes keep their sets: mixed clips don't thrash
+        recent.erase(std::remove(recent.begin(), recent.end(), key), recent.end());
+        recent.push_back(key);
+        while (recent.size() > kSizes) {
+            byKey.erase(recent.front());
+            recent.erase(recent.begin());
+        }
         auto& list = byKey[key];
         if (list.empty()) return std::make_shared<Scratch>();
         std::shared_ptr<Scratch> s = list.back();
@@ -40,13 +45,17 @@ public:
     void release(id<MTLDevice> device, const std::string& key, const std::shared_ptr<Scratch>& s)
     {
         std::lock_guard<std::mutex> lock(m_Mutex);
+        const auto& recent = m_Recent[device];
+        if (std::find(recent.begin(), recent.end(), key) == recent.end()) return;   // size evicted meanwhile
         auto& list = m_Free[device][key];
         if (list.size() < 3) list.push_back(s);
     }
 
 private:
+    static constexpr size_t kSizes = 2;
     std::mutex m_Mutex;
     std::map<id<MTLDevice>, std::map<std::string, std::vector<std::shared_ptr<Scratch>>>> m_Free;
+    std::map<id<MTLDevice>, std::vector<std::string>> m_Recent;
 };
 
 Pool& pool()
@@ -151,8 +160,7 @@ bool RunDetailKernels(void* p_CmdQ, const DetailParams& p, int p_RowPixels, cons
     const int W = p.W, H = p.H, w = p.w, h = p.h;
     const size_t full = (size_t)W * H, grid = (size_t)w * h;
     const bool dehaze = p.hazeOn != 0, transmission = dehaze && p.hazeMix == 0.0f;
-    const std::string key = std::to_string(W) + "x" + std::to_string(H) + (dehaze ? "h" : "") + std::to_string(p.s)
-                          + "/" + std::to_string(p.st);
+    const std::string key = std::to_string(W) + "x" + std::to_string(H);
     std::shared_ptr<Scratch> s = pool().acquire(device, key);
     auto P = [&](const char* name, size_t n) { return plane(device, *s, name, n); };
 

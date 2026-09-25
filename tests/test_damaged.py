@@ -100,6 +100,35 @@ class Damaged(unittest.TestCase):
         self.assertEqual(out['meta'], {})
         self.assertTrue(out['warnings'])
 
+    def test_truncated_stsz_counts_only_its_entries(self):
+        t = mp4.Track()
+        t.tables[b'stsz'] = bytes(4) + bytes(4) + (10).to_bytes(4, 'big') + (7).to_bytes(4, 'big') * 2
+        t.tables[b'stco'] = bytes(4) + (1).to_bytes(4, 'big') + (0).to_bytes(4, 'big')
+        t.tables[b'stsc'] = bytes(4) + (1).to_bytes(4, 'big') + b''.join(
+            v.to_bytes(4, 'big') for v in (1, 10, 1))
+        self.assertEqual(t.sample_count(), 2)
+        self.assertEqual(t.sample_offsets([0, 1, 5]), {0: 0, 1: 7})
+
+    def test_a_child_box_larger_than_its_parent_stops_at_the_parent(self):
+        class Buf:
+            def __init__(self, data):
+                self.data, self.size = data, len(data)
+
+            def read_at(self, pos, n):
+                return self.data[pos:pos + n]
+        inner = (1000).to_bytes(4, 'big') + b'stsd' + bytes(8)
+        outer = (8 + len(inner)).to_bytes(4, 'big') + b'stbl' + inner
+        boxes = list(mp4.iter_boxes(Buf(outer + bytes(2000)), 8, len(outer)))
+        self.assertEqual(boxes, [(b'stsd', 8, 8, len(inner))])
+
+    def test_a_bad_mxf_component_depth_is_ignored(self):
+        from slogmetaraw import datalevel
+        for depth in (1, 3, 64, 1 << 40):
+            self.assertIsNone(datalevel._mxf_level({'mxf_black_ref': 64, 'mxf_white_ref': 940,
+                                                    'mxf_component_depth': depth}))
+        self.assertEqual(datalevel._mxf_level({'mxf_black_ref': 64, 'mxf_white_ref': 940,
+                                               'mxf_component_depth': 10}), datalevel.VIDEO)
+
 
 if __name__ == '__main__':
     unittest.main()

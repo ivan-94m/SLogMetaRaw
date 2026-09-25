@@ -128,6 +128,11 @@ void defineLegacyTones(OFX::ImageEffectDescriptor& d, OFX::PageParamDescriptor* 
     }
 }
 
+void fetchLegacyTones(OFX::ImageEffect& e)
+{
+    for (const auto& l : kLegacy) (void)e.fetchDoubleParam(l[0]);
+}
+
 std::string legacyTonesNote(OFX::ImageEffect& e)
 {
     std::string list;

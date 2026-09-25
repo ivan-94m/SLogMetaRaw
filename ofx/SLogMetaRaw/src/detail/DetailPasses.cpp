@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "DetailPasses.h"
 
+#include <algorithm>
 #include <cmath>
 
 // Every filter sums its terms in a fixed order (tests/model/detail.py does the same), so one
@@ -14,16 +15,21 @@ void ensure(Plane& v, size_t n)
     if (v.size() < n) v.resize(n);
 }
 
+// The 1D filters run on `lanes` adjacent lines at once (lane l at in[j * stride + l]): the vertical pass
+// walks rows of a column block instead of single columns. Each lane sums in the same order as one line.
+const int kLanes = 32;
+
 // Separable filter over a W x H plane: horizontal pass into tmp, vertical pass into out.
 template <typename FH, typename FV>
 void separable(const Parallel& par, const float* in, int W, int H, int W2, int H2, float* tmp, float* out,
                FH horizontal, FV vertical)
 {
     par(H, [&](int b, int e) {
-        for (int y = b; y < e; ++y) horizontal(in + (size_t)y * W, 1, W, tmp + (size_t)y * W2, 1);
+        for (int y = b; y < e; ++y) horizontal(in + (size_t)y * W, 1, W, tmp + (size_t)y * W2, 1, 1);
     });
-    par(W2, [&](int b, int e) {
-        for (int x = b; x < e; ++x) vertical(tmp + x, W2, H, out + x, W2);
+    par((W2 + kLanes - 1) / kLanes, [&](int b, int e) {
+        for (int x = b * kLanes; x < e * kLanes && x < W2; x += kLanes)
+            vertical(tmp + x, W2, H, out + x, W2, std::min(kLanes, W2 - x));
     });
 }
 
@@ -31,18 +37,22 @@ void separable(const Parallel& par, const float* in, int W, int H, int W2, int H
 struct Tent
 {
     int s, nOut;
-    void operator()(const float* in, int stride, int n, float* out, int ostride) const
+    void operator()(const float* in, int stride, int n, float* out, int ostride, int lanes) const
     {
+        float acc[kLanes];
         for (int i = 0; i < nOut; ++i) {
             const float c = (i + 0.5f) * s - 0.5f;
-            float acc = 0.0f, wsum = 0.0f;
+            float wsum = 0.0f;
+            std::fill(acc, acc + lanes, 0.0f);
             for (int x = (int)std::floor(c - s) + 1; x < (int)std::ceil(c + s); ++x) {
                 const float w = s - std::fabs(x - c);
                 if (w <= 0.0f) continue;
-                acc += w * in[(size_t)(x < 0 ? 0 : (x > n - 1 ? n - 1 : x)) * stride];
+                const float* row = in + (size_t)(x < 0 ? 0 : (x > n - 1 ? n - 1 : x)) * stride;
+                for (int l = 0; l < lanes; ++l) acc[l] += w * row[l];
                 wsum += w;
             }
-            out[(size_t)i * ostride] = acc / wsum;
+            float* o = out + (size_t)i * ostride;
+            for (int l = 0; l < lanes; ++l) o[l] = acc[l] / wsum;
         }
     }
 };
@@ -51,16 +61,24 @@ struct Tent
 struct Box
 {
     float r;
-    void operator()(const float* in, int stride, int n, float* out, int ostride) const
+    void operator()(const float* in, int stride, int n, float* out, int ostride, int lanes) const
     {
+        float acc[kLanes];
         for (int i = 0; i < n; ++i) {
             const float rr = std::fmin(r, std::fmin((float)i, (float)(n - 1 - i)));
             const int k = (int)std::floor(rr);
             const float f = rr - k;
-            float acc = 0.0f;
-            for (int j = i - k; j <= i + k; ++j) acc += in[(size_t)j * stride];
-            if (f > 0.0f) acc += f * (in[(size_t)(i - k - 1) * stride] + in[(size_t)(i + k + 1) * stride]);
-            out[(size_t)i * ostride] = acc / (2.0f * rr + 1.0f);
+            std::fill(acc, acc + lanes, 0.0f);
+            for (int j = i - k; j <= i + k; ++j) {
+                const float* row = in + (size_t)j * stride;
+                for (int l = 0; l < lanes; ++l) acc[l] += row[l];
+            }
+            if (f > 0.0f) {
+                const float *lo = in + (size_t)(i - k - 1) * stride, *hi = in + (size_t)(i + k + 1) * stride;
+                for (int l = 0; l < lanes; ++l) acc[l] += f * (lo[l] + hi[l]);
+            }
+            float* o = out + (size_t)i * ostride;
+            for (int l = 0; l < lanes; ++l) o[l] = acc[l] / (2.0f * rr + 1.0f);
         }
     }
 };
@@ -70,19 +88,23 @@ struct Gauss
 {
     const float* half;
     int len;
-    void operator()(const float* in, int stride, int n, float* out, int ostride) const
+    void operator()(const float* in, int stride, int n, float* out, int ostride, int lanes) const
     {
         const int R = len - 1;
+        float acc[kLanes];
         for (int i = 0; i < n; ++i) {
-            float acc = 0.0f, wsum = 0.0f;
+            float wsum = 0.0f;
+            std::fill(acc, acc + lanes, 0.0f);
             for (int k = -R; k <= R; ++k) {
                 const int j = i + k;
                 if (j < 0 || j >= n) continue;
                 const float w = half[k < 0 ? -k : k];
-                acc += w * in[(size_t)j * stride];
+                const float* row = in + (size_t)j * stride;
+                for (int l = 0; l < lanes; ++l) acc[l] += w * row[l];
                 wsum += w;
             }
-            out[(size_t)i * ostride] = acc / wsum;
+            float* o = out + (size_t)i * ostride;
+            for (int l = 0; l < lanes; ++l) o[l] = acc[l] / wsum;
         }
     }
 };
@@ -140,19 +162,21 @@ void detailRenderCPU(const DetailParams& p, const float* src, size_t srcRow, flo
 {
     const int W = p.W, H = p.H, w = p.w, h = p.h;
     const size_t full = (size_t)W * H, grid = (size_t)w * h;
+    const bool dehaze = p.hazeOn != 0;
     ensure(s.L0, full);
+    if (dehaze) ensure(s.J, full * 3);   // Dehaze keeps the decoded source here, then dehazes it in place
     par(H, [&](int b, int e) {
         for (int y = b; y < e; ++y)
             for (int x = 0; x < W; ++x) {
+                const size_t i = (size_t)y * W + x;
                 SMf3 c = decoded(src + y * srcRow + (size_t)x * 4, p.gamma);
-                s.L0[(size_t)y * W + x] = finite3(c) ? dt_luma(c, p) : -16.0f;
+                s.L0[i] = finite3(c) ? dt_luma(c, p) : -16.0f;
+                if (dehaze) { s.J[i * 3] = c.x; s.J[i * 3 + 1] = c.y; s.J[i * 3 + 2] = c.z; }
             }
     });
     const float* L = s.L0.data();
 
-    const bool dehaze = p.hazeOn != 0;
     if (dehaze) {
-        ensure(s.J, full * 3);
         ensure(s.L, full);
         if (p.hazeMix == 0.0f) {   // the transmission map, on the grid
             ensure(s.xa, full);
@@ -161,9 +185,10 @@ void detailRenderCPU(const DetailParams& p, const float* src, size_t srcRow, flo
                 par(H, [&](int b, int e) {
                     for (int y = b; y < e; ++y)
                         for (int x = 0; x < W; ++x) {
-                            SMf3 v = decoded(src + y * srcRow + (size_t)x * 4, p.gamma);
+                            const size_t i = (size_t)y * W + x;
+                            const SMf3 v = smf3(s.J[i * 3], s.J[i * 3 + 1], s.J[i * 3 + 2]);
                             const float cv = c == 0 ? v.x : (c == 1 ? v.y : v.z);
-                            s.xa[(size_t)y * W + x] = finite3(v) ? cv * p.hazeInvA[c] : 0.0f;
+                            s.xa[i] = finite3(v) ? cv * p.hazeInvA[c] : 0.0f;
                         }
                 });
                 tent(par, s.xa.data(), W, H, p.s, s.ch[c].data(), s.tmp);
@@ -202,7 +227,7 @@ void detailRenderCPU(const DetailParams& p, const float* src, size_t srcRow, flo
             for (int y = b; y < e; ++y)
                 for (int x = 0; x < W; ++x) {
                     const size_t i = (size_t)y * W + x;
-                    SMf3 v = decoded(src + y * srcRow + (size_t)x * 4, p.gamma);
+                    const SMf3 v = smf3(s.J[i * 3], s.J[i * 3 + 1], s.J[i * 3 + 2]);
                     float t = 1.0f;
                     if (p.hazeMix == 0.0f)
                         t = sm_clamp(dt_bilinear(s.at.data(), w, h, p.s, x, y) * (L[i] - p.hazeLevel)

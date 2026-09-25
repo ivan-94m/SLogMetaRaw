@@ -58,6 +58,10 @@ DevelopEffect::DevelopEffect(OfxImageEffectHandle p_Handle)
         return;
     }
     m_RefEI = m_ShotEI->getValue();
+    try {
+        fetchLegacyTones(*this);
+    } catch (...) {
+    }
     // Some hosts refuse parameter changes while an instance is being created; beginEdit retries.
     // Only the cache here: opening a project must never wait for a reader per node.
     try {

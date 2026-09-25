@@ -77,24 +77,12 @@ def iter_boxes(f, start, end):
                 return
             size = struct.unpack('>Q', hdr[8:16])[0]
             hlen = 16
-        elif size == 0:
-            size = end - pos
+        elif size == 0 or pos + size > end:
+            size = end - pos       # to end, or clamped: a corrupt size must not read past the parent
         if size < hlen:
             return
         yield typ, pos, hlen, size
         pos += size
-
-
-def find_child(f, start, end, typ):
-    for t, p, hl, s in iter_boxes(f, start, end):
-        if t == typ:
-            return p, hl, s
-    return None
-
-
-def box_payload(f, box):
-    p, hl, s = box
-    return f.read_at(p + hl, s - hl)
 
 
 class Track:
@@ -111,7 +99,8 @@ class Track:
         stsz = self.tables.get(b'stsz')
         if not stsz or len(stsz) < 12:
             return 0
-        return struct.unpack('>I', stsz[8:12])[0]
+        fixed, count = struct.unpack('>II', stsz[4:12])
+        return count if fixed else min(count, (len(stsz) - 12) // 4)
 
     def sample_size(self, idx):
         stsz = self.tables[b'stsz']
@@ -131,7 +120,8 @@ class Track:
 
     def sample_offsets(self, wanted):
         """Return {sample_index: file_offset} for the requested sample indices."""
-        wanted = sorted(set(i for i in wanted if 0 <= i < self.sample_count()))
+        count = self.sample_count()
+        wanted = sorted(set(i for i in wanted if 0 <= i < count))
         if not wanted or b'stsc' not in self.tables or not (b'stco' in self.tables or b'co64' in self.tables):
             return {}
         stsc = self.tables[b'stsc']
@@ -156,9 +146,11 @@ class Track:
                     continue
                 off = chunks[c - 1]
                 for s in range(sample, chunk_end):
-                    if w < len(wanted) and s == wanted[w]:
+                    if s == wanted[w]:
                         out[s] = off
                         w += 1
+                        if w == len(wanted):
+                            return out
                     off += fixed if fixed else self.sample_size(s)
                 sample = chunk_end
         return out
@@ -231,6 +223,8 @@ class MP4:
                 self.meta_xml = f.read_at(p + hl + 4, s - hl - 4)
             elif t == b'iinf':
                 d = f.read_at(p + hl, s - hl)
+                if len(d) < 6:
+                    continue
                 ver = d[0]
                 q = 6 if ver == 0 else 8
                 while q + 14 <= len(d):
