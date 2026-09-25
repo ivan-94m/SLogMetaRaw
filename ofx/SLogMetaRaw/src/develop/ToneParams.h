@@ -27,4 +27,5 @@ void resetZones(OFX::ImageEffect& effect);   // "Azzera zone"
 // The 1.1 tone controls, kept by name (Resolve restores by name) only to say they were dropped.
 void defineLegacyTones(OFX::ImageEffectDescriptor& d, OFX::PageParamDescriptor* page);
 std::string legacyTonesNote(OFX::ImageEffect& effect);   // "" when nothing was set
+void fetchLegacyTones(OFX::ImageEffect& effect);          // at construction: no map insert while rendering
 void clearLegacyTones(OFX::ImageEffect& effect);

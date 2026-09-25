@@ -1,5 +1,40 @@
 # Changelog
 
+## S-Log MetaRaw 2.1.0
+
+Correzioni di stabilità e prestazioni, raccolte in una minor release. Nessun controllo cambia, nessun valore salvato
+cambia, l'immagine resta identica al bit (verificato sulla pipeline CPU del Detail).
+
+### Plugin
+
+- **Detail su CPU più veloce, soprattutto con Dehaze**: la sorgente si decodifica una volta sola (prima fino a 6 volte per
+  pixel con Dehaze attivo, #22) e i filtri verticali lavorano a blocchi di colonne invece che una colonna alla volta.
+  In UHD con Dehaze, circa il 30% in meno di tempo per frame.
+- **Detail su GPU non rialloca più ogni frame** quando due nodi Detail (uno con Dehaze, uno senza) o clip di risoluzioni
+  diverse si alternano: restano in memoria i piani delle ultime due dimensioni di frame, invece di buttarli e
+  ricrearli (fino a ~1,3 GB per frame in 8K).
+- **Meno RAM dopo un render grande**: i piani di lavoro della CPU cresciuti per un frame molto più grande di quello
+  corrente vengono liberati, invece di restare occupati per tutto il progetto.
+- **Nessun crash possibile con valori nascosti fuori scala** (per esempio un nodo salvato da una versione più recente):
+  gamut, curva e data level fuori tabella si leggono come "non noti" invece di leggere fuori dagli array.
+- **Nessuna corsa tra pannello e render sui toni 1.x**: i vecchi parametri si leggono alla creazione del nodo, non
+  la prima volta mentre un altro thread sta renderizzando.
+
+### Lettura dei metadata
+
+- **Box MP4 con dimensione corrotta** non fanno più leggere fino alla fine del file: un box figlio si ferma al padre.
+- **Tabella `stsz` troncata** o **box `iinf` vuoto** non fanno più fallire la lettura della clip.
+- **Profondità di bit MXF non valida** (danneggiata o assurda) non fa più fallire la clip: il data level resta non
+  determinato.
+
+### Script
+
+- **Cambio di progetto con la finestra aperta**: la lettura usa sempre il progetto corrente, e la scrittura si rifiuta
+  se il progetto è cambiato dopo la lettura, invece di scrivere su clip del progetto precedente.
+- Un percorso con un a capo nel nome non sfasa più i risultati delle clip successive.
+- Il messaggio "Prima premi Leggi metadata" dell'esportazione CSV ora è tradotto.
+- Tolto codice non più usato.
+
 ## S-Log MetaRaw 2.0.1
 
 Stabilità e prestazioni. Nessun controllo cambia, nessun valore salvato cambia, l'immagine resta identica.

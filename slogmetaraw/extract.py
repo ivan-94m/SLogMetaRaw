@@ -566,8 +566,3 @@ def read_clip(path, interval=1.0, max_samples=FULL_SAMPLES, allow_dataless=False
     _normalise(out)
     out['sections'] = _sections(out)
     return out
-
-
-def is_sony_clip(path):
-    ext = os.path.splitext(path)[1].lower()
-    return ext in ('.mp4', '.mxf') and (find_sidecar(path) is not None or ext == '.mp4')

@@ -203,10 +203,11 @@ def main(resolve, fusion, bmd, selftest=False):
     _exit_with_resolve()
     ui = fusion.UIManager
     disp = bmd.UIDispatcher(ui)
-    project = resolve.GetProjectManager().GetCurrentProject()
-    mp = project.GetMediaPool()
+    def current_project():
+        return resolve.GetProjectManager().GetCurrentProject()
 
     state = {
+        'project': None,    # name of the project the results were read from
         'clips': {},        # uid -> MediaPoolItem (used only while writing, on the UI thread)
         'results': {},      # uid -> result of the read
         'running': None,    # None | 'read' | 'write'
@@ -419,6 +420,11 @@ def main(resolve, fusion, bmd, selftest=False):
     # --- reading ------------------------------------------------------------
 
     def gather():
+        project = current_project()     # the user may switch project while the window is open
+        if project is None:
+            return []
+        state['project'] = project.GetName()
+        mp = project.GetMediaPool()
         src = itm['Source'].CurrentIndex
         if src == 0:
             clips = list(resolve_io.iter_media_pool_clips(mp.GetRootFolder()))
@@ -427,7 +433,7 @@ def main(resolve, fusion, bmd, selftest=False):
         out = []
         for c in clips:
             path = resolve_io.clip_path(c)
-            if path:
+            if path and '\n' not in path:    # the reader takes one path per line
                 out.append({'uid': c.GetUniqueId(), 'clip': c, 'name': c.GetName(), 'path': path})
         return out
 
@@ -562,6 +568,10 @@ def main(resolve, fusion, bmd, selftest=False):
         if not state['results']:
             status(t('Prima premi "Leggi metadata".'))
             return
+        project = current_project()
+        if project is None or project.GetName() != state['project']:
+            status(t('Il progetto è cambiato: premi di nuovo "Leggi metadata".'))
+            return
         state['write_queue'] = [(uid, state['clips'][uid], r)
                                 for uid, r in state['results'].items() if uid in state['clips']]
         if not state['write_queue']:
@@ -667,11 +677,11 @@ def main(resolve, fusion, bmd, selftest=False):
 
     def on_export(ev):
         if not state['results']:
-            status('Prima premi "Leggi metadata".')
+            status(t('Prima premi "Leggi metadata".'))
             return
         os.makedirs(EXPORT_DIR, exist_ok=True)
         stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        name = '%s_%s.csv' % (project.GetName().replace('/', '-'), stamp)
+        name = '%s_%s.csv' % ((state['project'] or 'SLogMetaRaw').replace('/', '-'), stamp)
         path = resolve_io.export_csv(list(state['results'].values()), os.path.join(EXPORT_DIR, name))
         status(t('CSV salvato: %s  →  in Resolve: File › Import › Metadata, con "crea campi custom" attivo.') % path)
 

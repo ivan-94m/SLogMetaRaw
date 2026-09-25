@@ -7,6 +7,9 @@ const int kSpaceCount = 11, kGammaCount = 11;
 extern const char* const kSpaceNames[kSpaceCount];
 extern const char* const kGammaNames[kGammaCount];
 extern const char* const kLevelNames[2];          // index = data level code, shared with datalevel.py
+// A saved code outside its table (e.g. from a newer build) reads as unknown.
+inline int validCode(int v, int count) { return v >= 0 && v < count ? v : -1; }
+
 // "Ingresso nodo" choice: 0 = automatic, then fixed (gamut, transfer) pairs.
 const int kNodeInputCount = 6;
 extern const int kNodeInputPairs[kNodeInputCount][2];

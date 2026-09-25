@@ -136,12 +136,13 @@ def _mxf_level(meta):
     black = meta.get('mxf_black_ref')
     white = meta.get('mxf_white_ref')
     depth = meta.get('mxf_component_depth') or meta.get('v_bit_depth')
-    if black is None or white is None or not depth:
+    if black is None or white is None or not depth or not 8 <= int(depth) <= 16:
         return None
-    top = (1 << int(depth)) - 1
+    depth = int(depth)
+    top = (1 << depth) - 1
     if black == 0 and white == top:
         return FULL
-    if black == (1 << (int(depth) - 4)) and white == (235 << (int(depth) - 8)):
+    if black == (1 << (depth - 4)) and white == (235 << (depth - 8)):
         return VIDEO
     # non-standard values: trust the black reference, it is the one that matters
     return FULL if black == 0 else VIDEO
