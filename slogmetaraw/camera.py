@@ -9,8 +9,7 @@ SPACE_CODE = {'DaVinci WG': 0, 'Rec.709': 1, 'Rec.2020': 2, 'P3 D65': 3, 'P3 D60
 GAMMA_CODE = {'DaVinci Intermediate': 0, 'Linear': 1, 'Gamma 2.2': 2, 'Gamma 2.4': 3, 'Gamma 2.6': 4,
               'Rec.709': 5, 'sRGB': 6, 'SLog': 7, 'SLog2': 8, 'SLog3': 9, 'ACEScct': 10}
 # nominal Kelvin for the Sony "Lighting preset" when the camera did not record 0x810E
-PRESET_KELVIN = {'Daylight': 5600, 'Cloudy': 6500, 'Shade': 7500, 'Incandescent': 3200,
-                 'Fluorescent': 4000}
+PRESET_KELVIN = {'Daylight': 5600, 'Cloudy': 6500, 'Incandescent': 3200, 'Fluorescent': 4000}
 
 
 class NotSupported(Exception):

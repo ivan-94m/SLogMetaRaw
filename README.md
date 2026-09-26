@@ -45,7 +45,7 @@ is there. It cannot create what is not there.
 
 ## Install
 
-1. Download `SLogMetaRaw-2.1.0.dmg` from **Releases** and open it.
+1. Download `SLogMetaRaw-2.1.1.dmg` from **Releases** and open it.
 2. Double-click **Installa S-Log MetaRaw.pkg**. It is not signed with an Apple certificate: the first time,
    right-click it and choose **Open**. It asks for the Mac password because the plugin goes in a system folder.
 3. Restart DaVinci Resolve.
@@ -128,7 +128,7 @@ The node is pointwise: each pixel depends only on itself. It never makes halos, 
 
 | Control | What it does |
 |---|---|
-| **Version** (top) | `v2.1.0`. Once a day it asks GitHub for the latest release. If there is one it reads **🟢 v2.1.0 → 2.x.y**, and a click opens the DMG download in the browser. It never installs anything itself |
+| **Version** (top) | `v2.1.1`. Once a day it asks GitHub for the latest release. If there is one it reads **🟢 v2.1.1 → 2.x.y**, and a click opens the DMG download in the browser. It never installs anything itself |
 | **Camera** · **Rileggi metadata** | the camera that was read. *Rileggi* re-reads the clip, sets every control back to the camera values and writes the clip's metadata into the Media Pool |
 | **Decode Using** | *Clip* lets you change the controls; *Camera metadata* locks them to the as-shot values |
 | **White Balance** · **Color Temp** · **Tint** | As shot or presets. Bradford chromatic adaptation in linear light, from the white the camera recorded |
@@ -205,7 +205,7 @@ but next to strong edges grain can grow 1.25–1.7×. Dehaze needs a real haze t
 ## Updates and privacy
 
 - The **nodes** ask GitHub for this project's latest release at most once a day, in the background. The request
-  carries only the program version (`User-Agent: SLogMetaRaw/2.1.0`). To turn it off, create the empty file
+  carries only the program version (`User-Agent: SLogMetaRaw/2.1.1`). To turn it off, create the empty file
   `~/Library/Application Support/SLogMetaRaw/no_update_check`.
 - The **script** checks only when you click its version.
 - A click only opens a download link from this project's GitHub releases. Nothing is installed without you.

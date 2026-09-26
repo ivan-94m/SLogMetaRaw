@@ -115,14 +115,14 @@ def _status(**values):
     return dict({'ok': 0, 'written': 0, 'failed': 0, 'clips': 0, 'level_host': '', 'error': ''}, **values)
 
 
-def write_to_resolve(path, r, on_connected=None):
+def write_to_resolve(path, r, on_connected=None, connect_timeout=None):
     """Write one clip into the Media Pool; returns the flat status the plugin reads back."""
     status = _status()
     try:
         if os.environ.get('SLOGMETARAW_TEST_NO_RESOLVE'):
             raise RuntimeError('scrittura in Resolve disabilitata (ambiente di test)')
         from . import connect
-        resolve = connect.connect()
+        resolve = connect.connect(connect_timeout)
         if on_connected:
             on_connected()
         report = connect.apply_path(resolve, path, r)
@@ -175,7 +175,8 @@ def _resolve_writer(path, r, status_path):
         os._exit(0)
 
     threading.Thread(target=watchdog, daemon=True).start()
-    status = write_to_resolve(path, r, on_connected=connected.set)
+    # the connection gives up just before the watchdog, so the status names the real reason
+    status = write_to_resolve(path, r, on_connected=connected.set, connect_timeout=RESOLVE_CONNECT - 0.25)
     finish(status)
     connected.set()
     done.set()
