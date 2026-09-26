@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include <algorithm>
+
 #include "ofxsImageEffect.h"
 #include "ofxsProcessing.h"
 
@@ -23,12 +25,17 @@ public:
 
     void multiThreadProcessImages(OfxRectI p_ProcWindow) override
     {
+        const OfxRectI b = _srcImg ? _srcImg->getBounds() : OfxRectI{0, 0, 0, 0};
+        const int sx1 = std::max(p_ProcWindow.x1, b.x1), sx2 = std::min(p_ProcWindow.x2, b.x2);
         for (int y = p_ProcWindow.y1; y < p_ProcWindow.y2; ++y) {
             if (_effect.abort()) break;
             float* dst = static_cast<float*>(_dstImg->getPixelAddress(p_ProcWindow.x1, y));
+            if (!dst) continue;
+            const float* row = sx1 < sx2 && y >= b.y1 && y < b.y2
+                ? static_cast<const float*>(_srcImg->getPixelAddress(sx1, y)) : nullptr;
             for (int x = p_ProcWindow.x1; x < p_ProcWindow.x2; ++x, dst += 4) {
-                const float* src = static_cast<const float*>(_srcImg ? _srcImg->getPixelAddress(x, y) : nullptr);
-                if (src) {
+                if (row && x >= sx1 && x < sx2) {
+                    const float* src = row + (size_t)(x - sx1) * 4;
                     SMf3 o = sm_develop(smf3(src[0], src[1], src[2]), _params);
                     dst[0] = o.x; dst[1] = o.y; dst[2] = o.z; dst[3] = src[3];
                 } else {

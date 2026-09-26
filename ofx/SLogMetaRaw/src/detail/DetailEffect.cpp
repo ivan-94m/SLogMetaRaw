@@ -286,7 +286,9 @@ void DetailEffect::render(const OFX::RenderArguments& p_Args)
         return;
     }
 #endif
-    Parallel parallel = [](int n, const std::function<void(int, int)>& fn) {
+    // once the host abandons the frame the remaining passes are skipped; it discards the output
+    Parallel parallel = [this](int n, const std::function<void(int, int)>& fn) {
+        if (abort()) return;
         HostThreads threads(n, fn);
         threads.multiThread();
     };

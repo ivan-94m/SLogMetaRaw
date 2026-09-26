@@ -1,5 +1,23 @@
 # Changelog
 
+## S-Log MetaRaw 2.1.1
+
+Correzioni di stabilità e prestazioni. Nessun controllo cambia, nessun valore salvato cambia, l'immagine resta
+identica.
+
+### Plugin
+
+- **Annullare un render del Detail su CPU è immediato**: quando Resolve abbandona il frame (scrubbing, stop del
+  render), i passi rimanenti vengono saltati invece di arrivare comunque alla fine (#24).
+- **Develop su CPU più leggero**: l'indirizzo della sorgente si calcola una volta per riga invece che per ogni pixel
+  (#24).
+
+### Script
+
+- **"Rileggi metadata" su Mac con più interfacce di rete**: i tentativi sugli indirizzi locali si dividono il tempo
+  concesso alla connessione invece di 1 s ciascuno, e l'errore riportato è quello vero invece di un timeout (#24).
+- Tolta la voce "Shade" dai Kelvin dei preset di luce: la camera non la registra mai, quindi non veniva mai usata (#24).
+
 ## S-Log MetaRaw 2.1.0
 
 Correzioni di stabilità e prestazioni, raccolte in una minor release. Nessun controllo cambia, nessun valore salvato

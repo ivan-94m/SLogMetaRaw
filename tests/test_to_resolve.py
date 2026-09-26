@@ -29,7 +29,7 @@ sys.path.insert(0, sys.argv[1])
 from slogmetaraw import __main__ as cli, connect
 mode, clip, marker = sys.argv[2:5]
 
-def fake_connect():
+def fake_connect(timeout=None):
     open(marker, 'w').close()
     if mode == 'blocked':
         threading.Event().wait()

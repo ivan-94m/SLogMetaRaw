@@ -57,6 +57,16 @@ class Connect(unittest.TestCase):
                 self.assertIs(connect.connect(), resolve)
         self.assertEqual(calls, [('Resolve',), ('Resolve', '192.168.1.11', 1.0)])
 
+    def test_timeout_is_shared_by_the_fallback_addresses(self):
+        bmd, calls = self.fake_bmd([None, None, None])
+        clock = iter([100.0, 100.0, 101.0, 101.5])
+        with mock.patch.dict(sys.modules, {'DaVinciResolveScript': bmd}), \
+                mock.patch.object(connect.time, 'monotonic', lambda: next(clock)), \
+                mock.patch.object(connect, '_local_ipv4_addresses', return_value=['10.0.0.1', '10.0.0.2', '10.0.0.3']):
+            with self.assertRaisesRegex(RuntimeError, 'connessione'):
+                connect.connect(1.5)
+        self.assertEqual(calls, [('Resolve',), ('Resolve', '10.0.0.1', 1.0), ('Resolve', '10.0.0.2', 0.5)])
+
     def test_connection_failure_raises(self):
         bmd, _ = self.fake_bmd([None, None])
         with mock.patch.dict(sys.modules, {'DaVinciResolveScript': bmd}):

@@ -8,6 +8,7 @@ refuse 127.0.0.1 while accepting an interface address, so the fallback tries the
 import os
 import socket
 import subprocess
+import time
 import unicodedata
 
 
@@ -33,8 +34,11 @@ def _local_ipv4_addresses():
     return addresses
 
 
-def connect():
-    """A connected Resolve object, or raise RuntimeError with a user-readable reason."""
+def connect(timeout=None):
+    """A connected Resolve object, or raise RuntimeError with a user-readable reason.
+
+    With a timeout the fallback addresses share what is left of it, instead of 1 s each."""
+    end = None if timeout is None else time.monotonic() + timeout
     try:
         import DaVinciResolveScript as bmd
     except Exception as exc:
@@ -47,8 +51,11 @@ def connect():
     if resolve:
         return resolve
     for address in _local_ipv4_addresses():
+        wait = 1.0 if end is None else min(1.0, end - time.monotonic())
+        if wait <= 0.05:
+            break
         try:
-            resolve = bmd.scriptapp('Resolve', address, 1.0)
+            resolve = bmd.scriptapp('Resolve', address, wait)
         except Exception:
             resolve = None
         if resolve:
